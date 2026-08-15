@@ -276,7 +276,7 @@ export function createChatPane(root) {
         const card = el('div', { class: `confirm-card${isDelete ? ' confirm-danger' : ''}` }, [
           el('div', { class: 'confirm-head' }, [
             el('span', { class: `method method-${method.toLowerCase()}`, text: method }),
-            el('strong', { text: host }),
+            hostDisplay(host),
           ]),
           isDelete ? el('p', { class: 'confirm-warn', text: 'DELETE always asks, even on approved domains.' }) : null,
           el('div', { class: 'confirm-url', text: maskSecrets(url, secrets) }),
@@ -338,6 +338,46 @@ export function createChatPane(root) {
       ]));
     },
   };
+}
+
+/**
+ * Render a hostname with its tail emphasised.
+ *
+ * The meaningful part of a host is its *end*. A long deceptive prefix —
+ * `api.github.com…….evil.example` — reads as trustworthy left-to-right, and
+ * left-to-right is how people read. Muting everything but the last few labels
+ * pulls the eye to where the truth is.
+ *
+ * This is a visual aid, not a security boundary: the full host is always
+ * rendered in full, and "last three labels" is an approximation of the
+ * registrable domain, not a public-suffix lookup.
+ *
+ * @param {string} host
+ * @returns {HTMLElement}
+ */
+export function hostDisplay(host) {
+  const { head, tail } = splitHostForDisplay(host);
+  if (head === '') return el('strong', { class: 'confirm-host', text: tail });
+  return el('strong', { class: 'confirm-host' }, [
+    el('span', { class: 'host-prefix', text: `${head}.` }),
+    el('span', { class: 'host-tail', text: tail }),
+  ]);
+}
+
+/**
+ * Split a hostname into a de-emphasised prefix and the tail worth reading.
+ *
+ * Pure, so the rule is testable without a DOM. `head` is empty when the host is
+ * short enough to read whole. Concatenating `head`, `'.'` and `tail` always
+ * reproduces the input exactly — nothing is ever dropped.
+ *
+ * @param {string} host
+ * @returns {{head: string, tail: string}}
+ */
+export function splitHostForDisplay(host) {
+  const labels = String(host).split('.');
+  if (labels.length <= 3) return { head: '', tail: String(host) };
+  return { head: labels.slice(0, -3).join('.'), tail: labels.slice(-3).join('.') };
 }
 
 /**

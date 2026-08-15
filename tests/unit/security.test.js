@@ -16,6 +16,7 @@ import {
   maskHeaders,
   maskSecrets,
   previewHeaders,
+  proxyHostFor,
   redactTemplate,
   stripPartialSecretTail,
   MASK,
@@ -26,6 +27,7 @@ import { createSettingsStore, createMemoryStorage } from '../../src/state/settin
 import { createRequestLog } from '../../src/state/log.js';
 import { createMockEngine } from '../../src/llm/mock.js';
 import { createApp } from '../../src/app.js';
+import { splitHostForDisplay } from '../../src/ui/chat.js';
 
 const SECRET = 'ghp_SUPERSECRET_TOKEN_123456';
 const scoped = [{ name: 'github', headerName: 'Authorization', hosts: ['api.github.com'], value: SECRET }];
@@ -586,5 +588,37 @@ describe('a header literally named __proto__ stays visible', () => {
     const hostile = Object.assign(Object.create(null), { ['__pro' + 'to__']: 'plain' });
     expect(Object.keys(previewHeaders(hostile))).toContain('__proto__');
     expect(Object.keys(maskHeaders(hostile))).toContain('__proto__');
+  });
+});
+
+describe('a long deceptive host is displayed tail-first', () => {
+  it('emphasises the labels that actually decide where a request goes', () => {
+    const host = `api.github.com${'a'.repeat(50)}.evil.example`;
+    const { head, tail } = splitHostForDisplay(host);
+    expect(head).toBe('api.github');
+    expect(tail.endsWith('.evil.example')).toBe(true);
+    // Nothing is hidden — this is emphasis, not truncation.
+    expect(`${head}.${tail}`).toBe(host);
+  });
+
+  it.each(['api.test', 'a.b.example', 'localhost'])('leaves the short host %s whole', (host) => {
+    expect(splitHostForDisplay(host)).toEqual({ head: '', tail: host });
+  });
+});
+
+describe('the proxy host shown on the card', () => {
+  it.each([
+    ['https://p.example/go?url={url}', 'p.example'],
+    ['https://p.example:8443/?url={url}', 'p.example:8443'],
+    ['', ''],
+    ['   ', ''],
+  ])('proxyHostFor(%s) === %s', (template, expected) => {
+    expect(proxyHostFor(template)).toBe(expected);
+  });
+
+  it('still names something useful for a malformed template', () => {
+    // Falls back to the leading token rather than showing nothing, because a
+    // card that names no proxy at all is the failure mode being fixed.
+    expect(proxyHostFor('p.example/?apikey=k&url={url}')).toBe('p.example');
   });
 });

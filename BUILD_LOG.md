@@ -306,9 +306,18 @@ claim holds, `el()` is not attribute-injectable, and a `Location: javascript:…
 header renders as inert text. Confirmation double-resolve and stale approval
 were both unreachable; number inputs cannot produce `NaN` or wedge a value.
 
+### Also changed
+
+The confirmation card now de-emphasises everything but the last three labels of
+a hostname. A deceptive prefix reads as trustworthy left-to-right, and
+left-to-right is how people read; pulling the eye to the tail is where the truth
+is. It is emphasis, not truncation — the full host is always rendered, and the
+split rule is a pure function so it is tested without a DOM.
+
 ### Verification
 
-- 402 unit tests, 39 Playwright scenarios, all green.
+- 419 unit tests, 39 Playwright scenarios, coverage gate green
+  (97.6% statements, 91.4% branches).
 - Nine new e2e regressions cover the Enter bypass, the Approve arming delay,
   proxy disclosure, sub-domain wrapping, the cancelled-card contradiction, caret
   orphaning, history preservation, settings-draft survival and the pre-load

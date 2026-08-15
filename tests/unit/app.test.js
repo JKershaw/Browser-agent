@@ -201,3 +201,63 @@ describe('createApp — probe', () => {
     expect(model.reason).toBe('');
   });
 });
+
+describe('createApp — mock engine URL flags', () => {
+  const withSearch = (search, fn) => {
+    const original = globalThis.location;
+    // The flags are read from location.search at construction time.
+    Object.defineProperty(globalThis, 'location', {
+      value: { search, protocol: 'https:' },
+      configurable: true,
+      writable: true,
+    });
+    try {
+      return fn();
+    } finally {
+      Object.defineProperty(globalThis, 'location', { value: original, configurable: true, writable: true });
+    }
+  };
+
+  it('builds a scripted mock engine from the URL', async () => {
+    const app = withSearch('?mockEngine=1&mockScript=' + encodeURIComponent('["scripted reply"]'), () =>
+      createApp({ storage: createMemoryStorage() })
+    );
+    expect(await app.engine.generate([])).toBe('scripted reply');
+  });
+
+  it('falls back to a default reply when the script is not valid JSON', async () => {
+    const app = withSearch('?mockEngine=1&mockScript=not-json', () =>
+      createApp({ storage: createMemoryStorage() })
+    );
+    expect(await app.engine.generate([])).toContain('mock engine');
+  });
+
+  it('accepts a single non-array script entry', async () => {
+    const app = withSearch('?mockEngine=1&mockScript=' + encodeURIComponent('"just one"'), () =>
+      createApp({ storage: createMemoryStorage() })
+    );
+    expect(await app.engine.generate([])).toBe('just one');
+  });
+
+  it('honours a simulated load delay, clamped to something sane', async () => {
+    const app = withSearch('?mockEngine=1&mockLoadMs=60', () => createApp({ storage: createMemoryStorage() }));
+    const t0 = Date.now();
+    await app.engine.load('m');
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(40);
+  });
+
+  it.each(['?mockEngine=1&mockLoadMs=abc', '?mockEngine=1&mockLoadMs=-5', '?mockEngine=1'])(
+    'treats %s as no delay',
+    async (search) => {
+      const app = withSearch(search, () => createApp({ storage: createMemoryStorage() }));
+      const t0 = Date.now();
+      await app.engine.load('m');
+      expect(Date.now() - t0).toBeLessThan(40);
+    }
+  );
+
+  it('reports a file:// origin', () => {
+    const app = withSearch('?mockEngine=1', () => createApp({ storage: createMemoryStorage() }));
+    expect(app.isFileOrigin()).toBe(false);
+  });
+});

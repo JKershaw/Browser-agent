@@ -319,6 +319,9 @@ body { display: flex; flex-direction: column; }
  */
 .confirm-head { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; }
 .confirm-head strong { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+/* A long deceptive prefix reads as trustworthy; the tail is what matters. */
+.host-prefix { color: var(--fg-muted); font-weight: 400; }
+.host-tail { color: var(--fg); font-weight: 700; }
 .confirm-remember span { min-width: 0; overflow-wrap: anywhere; }
 .confirm-warn { color: var(--error); font-size: .82rem; margin: .35rem 0 0; }
 .confirm-url {

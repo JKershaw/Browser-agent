@@ -98,7 +98,11 @@ describe('createMockEngine', () => {
     const e = createMockEngine();
     const progress = [];
     await e.load('mock-model', (p) => progress.push(p.progress));
-    expect(progress).toEqual([0, 0.5, 1]);
+    expect(progress[0]).toBe(0);
+    expect(progress.at(-1)).toBe(1);
+    // Not monotonic, on purpose: the fraction restarts at the top of each of
+    // WebLLM's three passes, and the mock would be lying if it did not.
+    expect(progress.some((p, i) => i > 0 && p < progress[i - 1])).toBe(true);
     expect(e.stats().modelId).toBe('mock-model');
   });
 
@@ -174,6 +178,38 @@ describe('createMockEngine', () => {
   it('reports load progress with a simulated duration', async () => {
     const onProgress = vi.fn();
     await createMockEngine({ loadMs: 3 }).load('m', onProgress);
-    expect(onProgress).toHaveBeenCalledTimes(3);
+    // One "start", twelve download shards, four cache reads, three shader
+    // batches and a finish — the shape `progress.js` has to cope with.
+    expect(onProgress).toHaveBeenCalledTimes(21);
+  });
+
+  it('always claims nothing is cached, so the UI takes its first-run path', async () => {
+    const e = createMockEngine();
+    expect(await e.isCached('anything')).toBe(false);
+    expect(await e.deleteFromCache('anything')).toBe(true);
+  });
+
+  it('replays WebLLM’s three-pass progress wording, restarts and all', async () => {
+    const texts = [];
+    await createMockEngine().load('m', (p) => texts.push(p.text));
+
+    expect(texts[0]).toBe('Start to fetch params');
+    expect(texts.some((t) => /^Fetching param cache\[\d+\/\d+\]: \d+MB fetched\. \d+% completed/.test(t))).toBe(true);
+    expect(texts.some((t) => /^Loading model from cache\[\d+\/\d+\]: \d+MB loaded\./.test(t))).toBe(true);
+    expect(texts.some((t) => /^Loading GPU shader modules\[\d+\/\d+\]: \d+% completed/.test(t))).toBe(true);
+    expect(texts.at(-1)).toMatch(/^Finish loading on/);
+  });
+
+  it('fails part-way through the download when asked to, with the given error', async () => {
+    const boom = new Error("Failed to execute 'add' on 'Cache': Entry was not found.");
+    boom.name = 'NotFoundError';
+    const seen = [];
+    const engine = createMockEngine({ failLoad: true, loadError: boom, failAt: 0.5 });
+
+    await expect(engine.load('m', (p) => seen.push(p.progress))).rejects.toThrow(boom);
+    // Part-way, not at the start: the diagnosis has to be exercised against a
+    // half-filled bar, which is where a real one dies.
+    expect(seen.length).toBeGreaterThan(1);
+    expect(Math.max(...seen)).toBeLessThan(1);
   });
 });

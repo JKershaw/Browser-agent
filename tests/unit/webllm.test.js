@@ -4,8 +4,10 @@ import {
   EXTRA_MODELS,
   MODEL_TIERS,
   createWebLLMEngine,
+  downloadBytesFor,
   looksMobile,
   pickDefaultModel,
+  smallerModelsThan,
 } from '../../src/llm/webllm.js';
 
 /** Fake `@mlc-ai/web-llm` module. */
@@ -28,6 +30,7 @@ function fakeModule({ chunks = [{ choices: [{ delta: { content: 'hi' } }] }], fa
     module: {
       prebuiltAppConfig: { model_list: [{ model_id: 'A', vram_required_MB: 100, low_resource_required: true }] },
       hasModelInCache: failCache ? async () => { throw new Error('no cache api'); } : async (id) => id === 'cached-model',
+      deleteModelAllInfoInCache: vi.fn(async () => {}),
       CreateMLCEngine: vi.fn(async (id, cfg) => {
         cfg.initProgressCallback?.({ progress: 0.5, text: 'fetching' });
         cfg.initProgressCallback?.({ text: 'no progress field' });
@@ -142,8 +145,8 @@ describe('createWebLLMEngine', () => {
     const progress = [];
     await e.load('Qwen3-0.6B-q4f16_1-MLC', (p) => progress.push(p));
     expect(fake.module.CreateMLCEngine).toHaveBeenCalledWith('Qwen3-0.6B-q4f16_1-MLC', expect.any(Object));
-    expect(progress[0]).toEqual({ progress: 0.5, text: 'fetching' });
-    expect(progress[1]).toEqual({ progress: 0, text: 'no progress field' });
+    expect(progress[0]).toEqual({ progress: 0.5, text: 'fetching', timeElapsed: null });
+    expect(progress[1]).toEqual({ progress: 0, text: 'no progress field', timeElapsed: null });
     expect(e.stats().modelId).toBe('Qwen3-0.6B-q4f16_1-MLC');
   });
 
@@ -258,5 +261,78 @@ describe('createWebLLMEngine', () => {
     const e = engineWith(fakeModule());
     await e.load('m');
     expect(e.stats()).toMatchObject({ prefillTokensPerSecond: null, decodeTokensPerSecond: null, totalTokens: 0 });
+  });
+});
+
+describe('downloadBytesFor', () => {
+  it('knows the size of every model it offers, so the storage check can run', () => {
+    for (const model of [...MODEL_TIERS, ...EXTRA_MODELS]) {
+      expect(downloadBytesFor(model.id)).toBeGreaterThan(0);
+    }
+  });
+
+  it('agrees with the size printed in the picker', () => {
+    // A mismatch here would warn about the wrong number of gigabytes.
+    for (const model of [...MODEL_TIERS, ...EXTRA_MODELS]) {
+      const printed = Number(model.approxDownload.replace(/[^\d.]/g, ''));
+      expect(downloadBytesFor(model.id) / 1024 ** 3).toBeCloseTo(printed, 5);
+    }
+  });
+
+  it('returns null for an id typed into the advanced field', () => {
+    // Guessing here would either block a load that would work or wave through
+    // one that cannot; "unknown" is the honest answer.
+    expect(downloadBytesFor('Some-Other-Model-MLC')).toBeNull();
+    expect(downloadBytesFor('')).toBeNull();
+  });
+});
+
+describe('deleteFromCache', () => {
+  it('asks WebLLM to drop every trace of a model', async () => {
+    const fake = fakeModule();
+    expect(await engineWith(fake).deleteFromCache('Qwen3-4B-q4f16_1-MLC')).toBe(true);
+    expect(fake.module.deleteModelAllInfoInCache).toHaveBeenCalledWith('Qwen3-4B-q4f16_1-MLC');
+  });
+
+  it('reports failure rather than throwing at someone already out of space', async () => {
+    const fake = fakeModule();
+    fake.module.deleteModelAllInfoInCache = async () => { throw new Error('cache locked'); };
+    expect(await engineWith(fake).deleteFromCache('x')).toBe(false);
+  });
+
+  it('reports false when the installed WebLLM has no such helper', async () => {
+    const fake = fakeModule();
+    delete fake.module.deleteModelAllInfoInCache;
+    expect(await engineWith(fake).deleteFromCache('x')).toBe(false);
+  });
+});
+
+describe('smallerModelsThan', () => {
+  it('excludes the model itself and anything larger', () => {
+    expect(smallerModelsThan('Qwen3-1.7B-q4f16_1-MLC').map((m) => m.id)).toEqual(['Qwen3-0.6B-q4f16_1-MLC']);
+    expect(smallerModelsThan('Qwen3-4B-q4f16_1-MLC').map((m) => m.id)).toEqual([
+      'Qwen3-1.7B-q4f16_1-MLC',
+      'Qwen3-0.6B-q4f16_1-MLC',
+    ]);
+  });
+
+  it('returns nothing for the smallest tier, so the advice can say so', () => {
+    expect(smallerModelsThan('Qwen3-0.6B-q4f16_1-MLC')).toEqual([]);
+  });
+
+  it('offers every tier for an id it does not recognise', () => {
+    // An advanced id could be any size; the known-small options are still the
+    // most useful thing to put in front of someone.
+    expect(smallerModelsThan('Some-Advanced-Model-MLC')).toHaveLength(MODEL_TIERS.length);
+  });
+
+  it('orders them largest first, so the least drastic option comes first', () => {
+    const sizes = smallerModelsThan('Qwen3.5-4B-q4f16_1-MLC').map((m) => downloadBytesFor(m.id));
+    expect(sizes).toEqual([...sizes].sort((a, b) => b - a));
+  });
+
+  it('carries the label and size the advice quotes', () => {
+    const [first] = smallerModelsThan('Qwen3-4B-q4f16_1-MLC');
+    expect(first).toMatchObject({ label: expect.stringContaining('Qwen3 1.7B'), approxDownload: '~1 GB' });
   });
 });

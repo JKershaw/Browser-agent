@@ -25,10 +25,21 @@ you can host anywhere static.
 | **Android** | Chrome with WebGPU (121+), on a reasonably recent device. Supported with the small model. |
 | **Firefox / Safari** | Run if their WebGPU works. Not test targets. |
 | **iOS Safari** | Best-effort. WebGPU availability and memory limits vary. |
-| **Disk / network** | 0.4–2.5 GB of model weights download on first use, then cached by the browser. |
+| **Disk / network** | 0.4–2.5 GB of model weights download on first use, then cached by the browser. Free space matters — see [When the model will not load](#when-the-model-will-not-load). |
 
 If WebGPU is missing you get a screen explaining what that is, why it matters,
 and how to turn it on in your browser — never a blank page.
+
+## The first load
+
+The model downloads once. While it does, a card shows the phase in words, the
+bytes against the total, the observed rate and an estimate of the time left,
+ticking along between the engine's reports rather than freezing between them.
+
+The estimate is deliberately vague — "about 2 minutes left", never a countdown
+to the second — because it is extrapolated from a rate that changes minute to
+minute. If the download goes quiet for more than twenty seconds, the card says
+so rather than leaving you to guess whether it has hung.
 
 ---
 
@@ -225,10 +236,53 @@ reliability across the three model tiers. It needs a GPU.
 
 ---
 
+## When the model will not load
+
+Model weights are written into the browser's cache in dozens of pieces, and on a
+device that is short of space that write fails. Chrome's own message for it says
+nothing about storage:
+
+```
+Failed to execute 'add' on 'Cache': Entry was not found.
+```
+
+So the app measures rather than guesses. Before the download it checks the space
+the browser is offering against the size of the model and warns if it will not
+fit. If a load fails it asks again, and the explanation quotes the numbers —
+"this site has 307 MB of storage left, and this model needs about 1 GB" — rather
+than listing possibilities.
+
+Whatever the cause, the failure card offers what will actually help:
+
+- **Try again.** Pieces already stored are kept, so a retry resumes rather than
+  restarting from zero.
+- **Choose a smaller model.** Only models genuinely smaller than the one that
+  failed are offered; if you are already on the smallest, it says so.
+- **Clear stored model data.** A download that stopped two thirds of the way
+  through has left two thirds of the weights on the device, and they are worth
+  nothing on their own. On a full phone this is often the biggest single thing
+  the app can give back.
+- **Details for a bug report.** A copyable block with the model, how far it got,
+  the storage figures, the device limits and the raw error. That is the right
+  thing to attach to an issue.
+
+A few notes on the space itself. Browsers grant a site a *share* of what is
+free, not all of it, so freeing a few gigabytes buys back less than that — but
+still more than you might expect. The app asks for persistent storage on
+startup, which stops the browser evicting the weights under pressure; Chrome
+grants this silently based on how often you visit. And if there is plenty of
+room free and it still fails, the cache itself is likely damaged: clear this
+site's data and reload.
+
+---
+
 ## Known limitations
 
 - **No offline operation.** Model weights stream from HuggingFace's CDN on first
   use. After that the browser cache handles it, but the first run needs network.
+- **A nearly-full device may not be able to run this at all.** The app explains
+  the shortfall and can reclaim what it stored, but it cannot free space it did
+  not take.
 - **`file://` caching is unreliable.** The app runs, but the model may
   re-download each session. Use a static server.
 - **iOS is best-effort.** WebGPU availability and memory limits vary by version

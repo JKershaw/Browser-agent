@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createApp, isFileOrigin, wantsMockEngine } from '../../src/app.js';
+import { createApp, isFileOrigin, mockLoadFailureFromUrl, reportablePageUrl, wantsMockEngine } from '../../src/app.js';
 import { createMemoryStorage } from '../../src/state/settings.js';
 import { createMockEngine } from '../../src/llm/mock.js';
 
@@ -453,5 +453,270 @@ describe('createApp — optional wiring', () => {
     await app.loop.run('go');
     // Nothing listens on port 1; the point is that a real fetch was reached.
     expect(app.log.all()[0].status).toBe('error');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * model loading: storage, diagnosis and cleanup
+ * ------------------------------------------------------------------ */
+
+const GB = 1024 ** 3;
+
+/** A navigator whose storage API answers with the given numbers. */
+function navWithStorage({ usage = 1 * GB, quota = 8 * GB, persisted = false, persist = true } = {}) {
+  return {
+    userAgent: 'TestAgent/1.0',
+    storage: {
+      estimate: async () => ({ usage, quota }),
+      persisted: async () => persisted,
+      persist: async () => persist,
+    },
+  };
+}
+
+describe('createApp().preflight', () => {
+  it('passes a device with room to spare', async () => {
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine(),
+      navigator: navWithStorage({ usage: 1 * GB, quota: 20 * GB }),
+    });
+    const pre = await app.preflight('Qwen3-1.7B-q4f16_1-MLC');
+    expect(pre.neededBytes).toBe(1 * GB);
+    expect(pre.headroom.level).toBe('ok');
+    expect(pre.headroom.message).toBeNull();
+  });
+
+  it('warns before the download rather than after it fails', async () => {
+    // The reported case: a phone with a few hundred megabytes to spare and a
+    // one-gigabyte model. Catching this here saves the whole download.
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine(),
+      navigator: navWithStorage({ usage: 5.6 * GB, quota: 5.9 * GB }),
+    });
+    const pre = await app.preflight('Qwen3-1.7B-q4f16_1-MLC');
+    expect(pre.headroom.level).toBe('insufficient');
+    expect(pre.headroom.message).toMatch(/short/);
+  });
+
+  it('asks for persistent storage, so the weights are not evicted mid-download', async () => {
+    const persist = vi.fn(async () => true);
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine(),
+      navigator: {
+        storage: { estimate: async () => ({ usage: 0, quota: 20 * GB }), persisted: async () => false, persist },
+      },
+    });
+    expect((await app.preflight('Qwen3-1.7B-q4f16_1-MLC')).persisted).toBe(true);
+    expect(persist).toHaveBeenCalled();
+  });
+
+  it('says "unknown" for a model id it has no size for', async () => {
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine(),
+      navigator: navWithStorage(),
+    });
+    const pre = await app.preflight('SomeThirdParty-7B-MLC');
+    expect(pre.neededBytes).toBeNull();
+    expect(pre.headroom.level).toBe('unknown');
+  });
+
+  it('does not throw where navigator.storage is missing', async () => {
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine(),
+      navigator: { userAgent: 'bare' },
+    });
+    const pre = await app.preflight('Qwen3-1.7B-q4f16_1-MLC');
+    expect(pre.storage.supported).toBe(false);
+    expect(pre.headroom.level).toBe('unknown');
+  });
+});
+
+describe('createApp().diagnoseLoad', () => {
+  const cacheError = () => {
+    const e = new Error("Failed to execute 'add' on 'Cache': Entry was not found.");
+    e.name = 'NotFoundError';
+    return e;
+  };
+
+  it('attaches the measured storage to the diagnosis', async () => {
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine(),
+      navigator: navWithStorage({ usage: 5.6 * GB, quota: 5.9 * GB }),
+    });
+    const d = await app.diagnoseLoad(cacheError(), { modelId: 'Qwen3-1.7B-q4f16_1-MLC' });
+
+    expect(d.kind).toBe('cache-write');
+    expect(d.explain).toMatch(/307 MB of storage left/);
+    expect(d.debug).toMatch(/Model:\s+Qwen3-1\.7B-q4f16_1-MLC \(about 1\.00 GB\)/);
+    expect(d.debug).toMatch(/Browser:\s+TestAgent\/1\.0/);
+  });
+
+  it('re-measures rather than trusting a figure from before the attempt', async () => {
+    const estimate = vi.fn(async () => ({ usage: 1 * GB, quota: 8 * GB }));
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine(),
+      navigator: { storage: { estimate } },
+    });
+    await app.diagnoseLoad(cacheError(), { modelId: 'Qwen3-1.7B-q4f16_1-MLC' });
+    expect(estimate).toHaveBeenCalled();
+  });
+
+  it('uses a storage reading it was handed instead of taking another', async () => {
+    const estimate = vi.fn(async () => ({ usage: 0, quota: 0 }));
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine(),
+      navigator: { storage: { estimate } },
+    });
+    const d = await app.diagnoseLoad(cacheError(), {
+      modelId: 'Qwen3-1.7B-q4f16_1-MLC',
+      storage: { supported: true, usageBytes: 0, quotaBytes: 40 * GB, freeBytes: 40 * GB, persisted: true },
+    });
+    expect(estimate).not.toHaveBeenCalled();
+    expect(d.advice.join(' ')).toMatch(/damaged cache/);
+  });
+
+  it('carries the progress snapshot into the report', async () => {
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine(),
+      navigator: navWithStorage(),
+    });
+    const d = await app.diagnoseLoad(cacheError(), {
+      modelId: 'Qwen3-1.7B-q4f16_1-MLC',
+      snapshot: { phaseLabel: 'Downloading the model', overall: 0.65, elapsedMs: 60_000, detail: 'part 24 of 38' },
+      caps: { deviceMemoryGb: 4, maxBufferBytes: 1 * GB, lowMemory: true },
+    });
+    expect(d.debug).toMatch(/Failed at: Downloading the model — 65% overall \(part 24 of 38\), after 1 m 00 s/);
+    expect(d.debug).toMatch(/memory 4 GB/);
+  });
+});
+
+describe('createApp().freeCachedModels', () => {
+  /** An engine that tracks a pretend cache. */
+  function engineWithCache(cached) {
+    const store = new Set(cached);
+    const engine = createMockEngine();
+    engine.isCached = async (id) => store.has(id);
+    engine.deleteFromCache = async (id) => {
+      store.delete(id);
+      return true;
+    };
+    return { engine, store };
+  }
+
+  it('removes only what is actually stored, and says what it removed', async () => {
+    const { engine, store } = engineWithCache(['Qwen3-4B-q4f16_1-MLC']);
+    let usage = 3 * GB;
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine,
+      navigator: { storage: { estimate: async () => ({ usage, quota: 8 * GB }) } },
+    });
+    // The second estimate happens after the deletion.
+    engine.deleteFromCache = async (id) => {
+      store.delete(id);
+      usage = 0.5 * GB;
+      return true;
+    };
+
+    const result = await app.freeCachedModels();
+    expect(result.deleted).toEqual(['Qwen3-4B-q4f16_1-MLC']);
+    expect(result.freedBytes).toBe(2.5 * GB);
+  });
+
+  it('includes the model that just failed, whose partial download is dead weight', async () => {
+    const { engine } = engineWithCache(['Some-Advanced-Model-MLC']);
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine,
+      navigator: navWithStorage(),
+    });
+    const result = await app.freeCachedModels(['Some-Advanced-Model-MLC']);
+    expect(result.deleted).toEqual(['Some-Advanced-Model-MLC']);
+  });
+
+  it('reports nothing removed rather than claiming space it did not free', async () => {
+    const { engine } = engineWithCache([]);
+    const app = createApp({ storage: createMemoryStorage(), engine, navigator: navWithStorage() });
+    expect(await app.freeCachedModels()).toEqual({ deleted: [], freedBytes: 0 });
+  });
+
+  it('survives an engine with no cache methods at all', async () => {
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: { ...createMockEngine(), isCached: undefined, deleteFromCache: undefined },
+      navigator: navWithStorage(),
+    });
+    expect(await app.deleteCachedModel('x')).toBe(false);
+    expect((await app.freeCachedModels()).deleted).toEqual([]);
+  });
+
+  it('treats a failing isCached as "not cached" instead of blowing up', async () => {
+    const engine = createMockEngine();
+    engine.isCached = async () => {
+      throw new Error('cache api unavailable');
+    };
+    const app = createApp({ storage: createMemoryStorage(), engine, navigator: navWithStorage() });
+    expect((await app.freeCachedModels()).deleted).toEqual([]);
+  });
+
+  it('reports unknown rather than zero when usage cannot be measured', async () => {
+    const { engine } = engineWithCache(['Qwen3-4B-q4f16_1-MLC']);
+    const app = createApp({ storage: createMemoryStorage(), engine, navigator: { userAgent: 'bare' } });
+    const result = await app.freeCachedModels();
+    expect(result.deleted).toEqual(['Qwen3-4B-q4f16_1-MLC']);
+    expect(result.freedBytes).toBeNull();
+  });
+});
+
+describe('mockLoadFailureFromUrl', () => {
+  it('reproduces the reported browser error verbatim, name and all', () => {
+    const spec = mockLoadFailureFromUrl('?mockLoadFail=cache');
+    expect(spec.failLoad).toBe(true);
+    expect(spec.loadError.name).toBe('NotFoundError');
+    expect(spec.loadError.message).toBe("Failed to execute 'add' on 'Cache': Entry was not found.");
+    // Part-way through, so the failure lands on a part-filled bar.
+    expect(spec.failAt).toBeGreaterThan(0);
+    expect(spec.failAt).toBeLessThan(1);
+  });
+
+  it('offers the other failure shapes the diagnosis distinguishes', () => {
+    expect(mockLoadFailureFromUrl('?mockLoadFail=quota').loadError.name).toBe('QuotaExceededError');
+    expect(mockLoadFailureFromUrl('?mockLoadFail=network').loadError.message).toMatch(/Failed to fetch/);
+    expect(mockLoadFailureFromUrl('?mockLoadFail=gpu').loadError.message).toMatch(/Out of memory/);
+    expect(mockLoadFailureFromUrl('?mockLoadFail=something-else').loadError.message).toMatch(/something-else/);
+  });
+
+  it('is inert without the parameter', () => {
+    expect(mockLoadFailureFromUrl('')).toEqual({});
+    expect(mockLoadFailureFromUrl('?mockEngine=1')).toEqual({});
+  });
+});
+
+describe('reportablePageUrl', () => {
+  it('keeps the origin and path, which is what diagnoses a deployment', () => {
+    expect(reportablePageUrl({ origin: 'https://www.jkershaw.com', pathname: '/Browser-agent/', search: '' }))
+      .toBe('https://www.jkershaw.com/Browser-agent/');
+  });
+
+  it('drops the query string, which the app cannot vouch for', () => {
+    // The report is written to be pasted into a public tracker. Nothing here
+    // knows what someone has appended to their URL.
+    expect(reportablePageUrl({ origin: 'https://host', pathname: '/app/', search: '?token=hunter2' }))
+      .toBe('https://host/app/ (query string omitted)');
+  });
+
+  it('copes with a file:// origin and with no location at all', () => {
+    expect(reportablePageUrl({ origin: 'null', protocol: 'file:', pathname: '/tmp/index.html', search: '' }))
+      .toBe('file:/tmp/index.html');
+    expect(reportablePageUrl(null)).toBe('unknown');
   });
 });

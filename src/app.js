@@ -10,8 +10,17 @@
 import { createAgentLoop } from './agent/loop.js';
 import { executeCurl, formatResultForModel } from './tools/curl.js';
 import { assertEngine, detectCapabilities } from './llm/engine.js';
+import { diagnoseLoadError } from './llm/load-error.js';
 import { createMockEngine } from './llm/mock.js';
-import { MODEL_TIERS, createWebLLMEngine, looksMobile, pickDefaultModel } from './llm/webllm.js';
+import { checkHeadroom, estimateStorage, requestPersistence } from './llm/storage.js';
+import {
+  MODEL_TIERS,
+  createWebLLMEngine,
+  downloadBytesFor,
+  looksMobile,
+  pickDefaultModel,
+  smallerModelsThan,
+} from './llm/webllm.js';
 import { createRequestLog } from './state/log.js';
 import { createSettingsStore } from './state/settings.js';
 
@@ -56,7 +65,12 @@ export function createApp(opts = {}) {
 
   const engine = assertEngine(
     opts.engine || (wantsMockEngine()
-      ? createMockEngine({ script: mockScriptFromUrl(), deltaMs: 8, loadMs: mockLoadMsFromUrl() })
+      ? createMockEngine({
+        script: mockScriptFromUrl(),
+        deltaMs: 8,
+        loadMs: mockLoadMsFromUrl(),
+        ...mockLoadFailureFromUrl(),
+      })
       : createWebLLMEngine({ navigator: opts.navigator }))
   );
 
@@ -100,6 +114,16 @@ export function createApp(opts = {}) {
       });
       throw e;
     }
+  }
+
+  /**
+   * Ask the engine to drop a model's cached weights.
+   * @param {string} modelId
+   * @returns {Promise<boolean>}
+   */
+  async function deleteCachedModel(modelId) {
+    if (typeof engine.deleteFromCache !== 'function') return false;
+    return Boolean(await engine.deleteFromCache(modelId));
   }
 
   const loop = createAgentLoop({
@@ -154,9 +178,166 @@ export function createApp(opts = {}) {
       return { caps, model };
     },
 
+    /**
+     * Check there is somewhere to put the model before spending minutes
+     * fetching it.
+     *
+     * A download that dies at 65% because the device was always too full is a
+     * waste of the user's time and their mobile data, and the failure it
+     * produces is far harder to read than the warning it could have been. This
+     * measures first and reports what it found.
+     *
+     * Advisory only: `navigator.storage` is missing in places the app still
+     * works, and the quota it reports is an estimate the browser is free to
+     * revise. Refusing to try on the strength of it would be worse than the
+     * failure it prevents.
+     *
+     * @param {string} modelId
+     * @returns {Promise<{storage: object, neededBytes: number|null,
+     *                    headroom: {level: string, shortfallBytes: number|null, message: string|null},
+     *                    persisted: boolean|null}>}
+     */
+    async preflight(modelId) {
+      const nav = opts.navigator ?? globalThis.navigator;
+      // Asked for before the download, not after: persistence exempts the
+      // weights from eviction, and eviction mid-download is one of the ways
+      // this fails on a device under storage pressure.
+      const persisted = await requestPersistence(nav);
+      const storage = await estimateStorage(nav);
+      const neededBytes = downloadBytesFor(modelId);
+      return {
+        storage,
+        neededBytes,
+        headroom: checkHeadroom({ freeBytes: storage.freeBytes, neededBytes }),
+        persisted,
+      };
+    },
+
+    /**
+     * Explain a load failure with everything measurable attached.
+     *
+     * @param {unknown} error
+     * @param {{modelId?: string, snapshot?: object, caps?: object, storage?: object}} [ctx]
+     * @returns {Promise<object>} A diagnosis from `llm/load-error.js`.
+     */
+    async diagnoseLoad(error, ctx = {}) {
+      const nav = opts.navigator ?? globalThis.navigator;
+      // Re-measured rather than reused: the interesting question is how much
+      // room there is *now*, after the attempt, and a download that half
+      // succeeded has changed the answer.
+      const storage = ctx.storage ?? (await estimateStorage(nav));
+      return diagnoseLoadError(error, {
+        modelId: ctx.modelId,
+        modelBytes: downloadBytesFor(ctx.modelId),
+        // So the advice never suggests switching to the model that just failed.
+        smallerModels: smallerModelsThan(ctx.modelId),
+        storage,
+        snapshot: ctx.snapshot,
+        caps: ctx.caps,
+        userAgent: nav?.userAgent || 'unknown',
+        pageUrl: reportablePageUrl(),
+        timestamp: new Date().toISOString(),
+      });
+    },
+
+    /**
+     * Reclaim the space a model's weights occupy.
+     * @param {string} modelId
+     * @returns {Promise<boolean>}
+     */
+    deleteCachedModel,
+
+    /**
+     * Delete every model this app knows how to cache, and report what that won
+     * back.
+     *
+     * Includes the model that has just failed, deliberately. A download that
+     * stopped two thirds of the way through leaves two thirds of the weights
+     * on the device, and they are worth nothing on their own — on a phone that
+     * has run out of room, that dead weight is often the largest single thing
+     * the app can give back.
+     *
+     * @param {string[]} [alsoDelete] Extra ids — typically the one that failed,
+     *   which may be an advanced id outside the tier list.
+     * @returns {Promise<{deleted: string[], freedBytes: number|null}>}
+     */
+    async freeCachedModels(alsoDelete = []) {
+      const nav = opts.navigator ?? globalThis.navigator;
+      const before = await estimateStorage(nav);
+
+      const ids = [...new Set([...MODEL_TIERS.map((t) => t.id), ...alsoDelete.filter(Boolean)])];
+      const deleted = [];
+      for (const id of ids) {
+        // Deleting what was never there is harmless, but reporting it as
+        // reclaimed space would be a lie, so ask first where we can.
+        let cached = true;
+        if (typeof engine.isCached === 'function') {
+          cached = await engine.isCached(id).catch(() => false);
+        }
+        if (!cached) continue;
+        if (await deleteCachedModel(id)) deleted.push(id);
+      }
+
+      const after = await estimateStorage(nav);
+      const freedBytes =
+        before.usageBytes !== null && after.usageBytes !== null
+          ? Math.max(0, before.usageBytes - after.usageBytes)
+          : null;
+      return { deleted, freedBytes };
+    },
+
     /** All models offered in the picker, spec tiers first. */
     tiers: MODEL_TIERS,
   };
+}
+
+/**
+ * Where the app is hosted, without whatever is in the query string.
+ *
+ * The debug report is written to be pasted into a public bug tracker. Origin
+ * and path are what diagnose a deployment; query parameters are not, and this
+ * app has no way of knowing what someone has put in one.
+ *
+ * @param {Location} [loc]
+ * @returns {string}
+ */
+export function reportablePageUrl(loc = globalThis.location) {
+  if (!loc) return 'unknown';
+  const origin = loc.origin && loc.origin !== 'null' ? loc.origin : loc.protocol || '';
+  const path = loc.pathname || '';
+  const base = `${origin}${path}` || String(loc.href || 'unknown');
+  return loc.search ? `${base} (query string omitted)` : base;
+}
+
+/**
+ * The e2e suite's hook for reproducing a specific load failure.
+ *
+ * `?mockLoadFail=cache` replays the error that prompted all of this, verbatim,
+ * including its DOMException name — so the diagnosis path is tested against the
+ * real string rather than a paraphrase of it.
+ *
+ * @returns {{failLoad?: boolean, loadError?: Error, failAt?: number}}
+ */
+export function mockLoadFailureFromUrl(search = globalThis.location?.search || '') {
+  const kind = new URLSearchParams(search).get('mockLoadFail');
+  if (!kind) return {};
+
+  const errors = {
+    cache: (() => {
+      const e = new Error("Failed to execute 'add' on 'Cache': Entry was not found.");
+      e.name = 'NotFoundError';
+      return e;
+    })(),
+    quota: (() => {
+      const e = new Error('Quota exceeded.');
+      e.name = 'QuotaExceededError';
+      return e;
+    })(),
+    network: new TypeError('Failed to fetch'),
+    gpu: new Error('Out of memory: the requested buffer size exceeds the max buffer size.'),
+  };
+
+  return { failLoad: true, loadError: errors[kind] || new Error(`Mock load failure: ${kind}`), failAt: 0.65 };
 }
 
 /**

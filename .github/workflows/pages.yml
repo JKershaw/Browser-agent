@@ -31,12 +31,12 @@ jobs:
       - run: npm run test:coverage
       - run: npm run build
 
-      # `enablement: true` turns Pages on via the API if it is not already,
-      # so a fresh fork needs no clicking through repository settings — the
-      # first push to main is the whole setup.
+      # Deliberately no `enablement: true`. Creating a Pages site needs admin
+      # rights the default GITHUB_TOKEN does not have; it fails with "Resource
+      # not accessible by integration" and takes the whole deploy down with it.
+      # Pages has to be switched to "GitHub Actions" once, by hand, in
+      # Settings → Pages → Source. The README says so.
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -51,3 +51,40 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+      # Check what is actually live, not merely that the job reported success.
+      #
+      # Serving the repository root instead of the build produces a page that
+      # loads and then silently does nothing: a green deploy and a dead site.
+      # The two are easy to tell apart — the built artifact inlines everything
+      # and runs to megabytes, while the source entry is ~3 kB and references
+      # /src/main.js, which exists only during development.
+      - name: Verify the deployed page is the built artifact
+        run: |
+          set -euo pipefail
+          url='${{ steps.deployment.outputs.page_url }}'
+          echo "Checking $url"
+
+          body=$(mktemp)
+          code=$(curl -sS -L --retry 5 --retry-delay 5 --retry-all-errors \
+                      -o "$body" -w '%{http_code}' "$url")
+          size=$(wc -c < "$body")
+          echo "HTTP $code, $size bytes"
+
+          if [ "$code" != "200" ]; then
+            echo "::error::The deployed page returned HTTP $code"
+            exit 1
+          fi
+
+          if grep -q 'src="/src/main.js"' "$body"; then
+            echo "::error::The site is serving the unbuilt source entry point, so the app cannot start."
+            echo "::error::Fix: Settings → Pages → Source must be \"GitHub Actions\", not \"Deploy from a branch\"."
+            exit 1
+          fi
+
+          if [ "$size" -lt 1000000 ]; then
+            echo "::error::The deployed page is only $size bytes. The built artifact inlines the whole runtime and is far larger, so this is not it."
+            exit 1
+          fi
+
+          echo "The built artifact is live."

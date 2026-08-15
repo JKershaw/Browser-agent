@@ -35,10 +35,21 @@ and how to turn it on in your browser — never a blank page.
 ## Deploy it yourself in two minutes
 
 1. **Fork this repository.**
-2. **Push anything to `main`** (or run the "Deploy to GitHub Pages" workflow by
-   hand). It runs the tests, builds the single file, enables Pages for you and
-   publishes. There is nothing to configure in repository settings.
-3. **Open the URL it gives you** — `https://<your-user>.github.io/Browser-agent/`.
+2. **Settings → Pages → Source: "GitHub Actions".** This step is required and
+   cannot be automated — creating a Pages site needs admin rights that a
+   workflow token does not have.
+
+   > Picking **"Deploy from a branch"** here looks like it works and does not:
+   > it copies the repository root to the site, so visitors get Vite's source
+   > `index.html`, whose `/src/main.js` does not exist in a build. The page
+   > loads and the app never starts. The deploy workflow checks for exactly
+   > this and fails loudly if it happens.
+
+3. **Push anything to `main`**, or run the "Deploy to GitHub Pages" workflow by
+   hand. It runs the tests, builds the single file, publishes it, and then
+   fetches the live URL to confirm the built artifact is what is actually being
+   served.
+4. **Open the URL it gives you** — `https://<your-user>.github.io/Browser-agent/`.
    It works the same on a phone.
 
 The first load downloads the model. Subsequent loads are seconds.

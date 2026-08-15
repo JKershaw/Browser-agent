@@ -110,6 +110,23 @@ describe('createMockEngine', () => {
     await expect(createMockEngine({ failLoad: true }).load('x')).rejects.toThrow(/fail loading/);
   });
 
+  it('is not cached by default, and says so', async () => {
+    expect(await createMockEngine().isCached('x')).toBe(false);
+  });
+
+  it('cached: reports the model as cached and skips the download pass', async () => {
+    const e = createMockEngine({ cached: true });
+    expect(await e.isCached('mock-model')).toBe(true);
+
+    const texts = [];
+    await e.load('mock-model', (p) => texts.push(p.text));
+    // No fetch pass at all — the first real report is the cache read, which is
+    // exactly how WebLLM reports a fully cached model.
+    expect(texts.some((t) => t.includes('Fetching param cache'))).toBe(false);
+    expect(texts.some((t) => t.includes('Loading model from cache'))).toBe(true);
+    expect(e.stats().modelId).toBe('mock-model');
+  });
+
   it('streams deltas that reassemble into the full reply', async () => {
     const e = createMockEngine({ script: ['one two three'] });
     const deltas = [];

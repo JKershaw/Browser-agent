@@ -364,7 +364,9 @@ the sheets into a permanent side rail. Colours are tokens redefined under
 - **Real-model e2e** (`npm run test:e2e:real`) drives the actual Qwen3-0.6B
   through WebLLM. Excluded from CI: it needs a working WebGPU device.
 
-The e2e suite scripts the model via `?mockEngine=1&mockScript=[…]`. That flag
+The e2e suite scripts the model via `?mockEngine=1&mockScript=[…]`, with
+`mockLoadMs`, `mockLoadFail` and `mockCached` to hold, fail or shortcut the
+simulated load. That flag
 ships in the artifact, which is a deliberate trade-off — it is the only way to
 test the real single file — and the app posts a visible warning whenever it is
 active.

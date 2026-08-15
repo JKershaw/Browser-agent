@@ -30,6 +30,8 @@ import { emptyStats } from './engine.js';
  *   failing, so the error arrives against a part-filled progress bar rather
  *   than an empty one.
  * @param {number} [opts.totalMb] Simulated download size.
+ * @param {boolean} [opts.cached] Pretend the model is already downloaded, so
+ *   `load` skips the fetch pass and the loading UI takes its cached path.
  * @returns {import('./engine.js').Engine & {calls: Array<object>, setScript: Function}}
  */
 export function createMockEngine(opts = {}) {
@@ -64,9 +66,12 @@ export function createMockEngine(opts = {}) {
       };
     },
 
-    /** Nothing is cached, so the loading UI always takes its first-run path. */
+    /**
+     * Nothing is cached by default, so the loading UI takes its first-run
+     * path; `opts.cached` flips it so the cached path is testable too.
+     */
     async isCached() {
-      return false;
+      return Boolean(opts.cached);
     },
 
     async deleteFromCache() {
@@ -91,21 +96,24 @@ export function createMockEngine(opts = {}) {
       emit('Start to fetch params', 0);
       await sleep(step);
 
-      // Download.
-      for (let i = 1; i <= 12; i += 1) {
-        const fraction = i / 12;
-        if (opts.failLoad && fraction >= failAt) {
-          throw opts.loadError || new Error('Mock engine was configured to fail loading.');
+      // Download — skipped entirely for a cached model, exactly as WebLLM
+      // skips it: the first report is then the cache read below.
+      if (!opts.cached) {
+        for (let i = 1; i <= 12; i += 1) {
+          const fraction = i / 12;
+          if (opts.failLoad && fraction >= failAt) {
+            throw opts.loadError || new Error('Mock engine was configured to fail loading.');
+          }
+          const shard = Math.round(fraction * shards);
+          const mb = Math.ceil(fraction * totalMb);
+          emit(
+            `Fetching param cache[${shard}/${shards}]: ${mb}MB fetched. ${Math.floor(fraction * 100)}% completed, ` +
+              `${Math.round((i * step) / 1000)} secs elapsed. It can take a while when we first visit this page to populate the cache.` +
+              ' Later refreshes will become faster.',
+            fraction
+          );
+          await sleep(step);
         }
-        const shard = Math.round(fraction * shards);
-        const mb = Math.ceil(fraction * totalMb);
-        emit(
-          `Fetching param cache[${shard}/${shards}]: ${mb}MB fetched. ${Math.floor(fraction * 100)}% completed, ` +
-            `${Math.round((i * step) / 1000)} secs elapsed. It can take a while when we first visit this page to populate the cache.` +
-            ' Later refreshes will become faster.',
-          fraction
-        );
-        await sleep(step);
       }
       if (opts.failLoad) throw opts.loadError || new Error('Mock engine was configured to fail loading.');
 

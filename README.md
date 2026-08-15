@@ -109,7 +109,7 @@ the last request's latency, and a live iteration counter.
 |---|---|
 | `Enter` | Send (desktop only — on a touch keyboard it inserts a newline) |
 | `Shift`+`Enter` | Newline |
-| `Esc` | Close the settings or log sheet |
+| `Esc` | Close the settings or log sheet; with neither open, deny an open confirmation card |
 
 ---
 

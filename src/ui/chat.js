@@ -349,6 +349,18 @@ export function createChatPane(root) {
     },
 
     /**
+     * Deny an open confirmation card exactly as the Deny button would.
+     * Bound to Escape: the refusal is the reversible outcome, so it is the
+     * one a dismissive keystroke may safely mean.
+     */
+    denyConfirm() {
+      pendingCard?.finish({
+        approved: false,
+        reason: 'The user denied the request at the confirmation prompt.',
+      });
+    },
+
+    /**
      * @param {{kind: string, text: string}} notice
      */
     addNotice(notice) {
@@ -394,8 +406,15 @@ export function hostDisplay(host) {
  * @returns {{head: string, tail: string}}
  */
 export function splitHostForDisplay(host) {
-  const labels = String(host).split('.');
-  if (labels.length <= 3) return { head: '', tail: String(host) };
+  const s = String(host);
+  // An IP address has no registrable domain, so "the last three labels" is
+  // meaningless for one — de-emphasising the first octet of 127.0.0.1 only
+  // makes the address harder to read. Render it whole.
+  if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(s) || s.startsWith('[')) {
+    return { head: '', tail: s };
+  }
+  const labels = s.split('.');
+  if (labels.length <= 3) return { head: '', tail: s };
   return { head: labels.slice(0, -3).join('.'), tail: labels.slice(-3).join('.') };
 }
 

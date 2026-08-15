@@ -178,7 +178,13 @@ for (const id of ['settings', 'log']) {
 
 scrim.addEventListener('click', closeSheets);
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeSheets();
+  if (e.key !== 'Escape') return;
+  // An open sheet is the topmost thing on screen, so Escape closes it first;
+  // with nothing else open, Escape refuses a pending confirmation card — the
+  // reversible reading of a dismissive keystroke. Never both at once.
+  const sheetOpen = ['settings', 'log'].some((id) => $(`#${id}-sheet`).dataset.open === 'true');
+  if (sheetOpen) closeSheets();
+  else chat.denyConfirm();
 });
 
 /* ------------------------------------------------------------------ *

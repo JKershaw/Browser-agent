@@ -69,6 +69,7 @@ export function createApp(opts = {}) {
         script: mockScriptFromUrl(),
         deltaMs: 8,
         loadMs: mockLoadMsFromUrl(),
+        cached: wantsMockCached(),
         ...mockLoadFailureFromUrl(),
       })
       : createWebLLMEngine({ navigator: opts.navigator }))
@@ -307,6 +308,19 @@ export function reportablePageUrl(loc = globalThis.location) {
   const path = loc.pathname || '';
   const base = `${origin}${path}` || String(loc.href || 'unknown');
   return loc.search ? `${base} (query string omitted)` : base;
+}
+
+/**
+ * The e2e suite's hook for the already-downloaded path: `?mockCached=1` makes
+ * the mock engine report the model as cached and skip its download pass, so
+ * the loading card's cached wording and the settings sheet's cache badge are
+ * testable without a real cache.
+ *
+ * @param {string} [search]
+ * @returns {boolean}
+ */
+export function wantsMockCached(search = globalThis.location?.search || '') {
+  return new URLSearchParams(search).get('mockCached') === '1';
 }
 
 /**

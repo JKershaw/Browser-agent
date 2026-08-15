@@ -13,6 +13,15 @@ import { MASK, maskHeaders, maskSecrets, previewHeaders } from '../tools/curl.js
 import { clear, disclosure, el, formatMs, prettyJson } from './dom.js';
 
 /**
+ * How long Approve stays disabled after a confirmation card appears.
+ *
+ * Long enough to defeat a key repeat or the reflex second Enter that follows
+ * pressing Enter to send; short enough that a deliberate click is never
+ * frustrated.
+ */
+export const ARM_DELAY_MS = 600;
+
+/**
  * @param {HTMLElement} root Scroll container the messages live in.
  * @returns {object}
  */
@@ -55,6 +64,10 @@ export function createChatPane(root) {
      * @param {{repair?: boolean}} [opts]
      */
     beginStream(opts = {}) {
+      // Settle any bubble still open. A repair round starts a second
+      // generation, and without this the first one is left on screen forever
+      // with a live blinking caret implying it is still being written.
+      this.settleStream();
       streamBuffer = '';
       streaming = el('div', { class: `msg msg-assistant${opts.repair ? ' msg-repair' : ''}` }, [
         opts.repair ? el('div', { class: 'msg-tag', text: 'correcting its tool call…' }) : null,
@@ -78,6 +91,26 @@ export function createChatPane(root) {
      */
     dropStream() {
       streaming?.remove();
+      streaming = null;
+      streamBuffer = '';
+    },
+
+    /**
+     * Close off an open bubble without replacing its text.
+     *
+     * Called when a turn ends for any reason — cancellation, an engine error,
+     * a repair round starting. Whatever the model managed to say stays on
+     * screen and stops pretending to still be arriving; an empty bubble is
+     * removed rather than left as a stray caret.
+     *
+     * Crucially this makes the bubble *permanent*, so the next user message no
+     * longer retroactively deletes a partial answer from the history.
+     */
+    settleStream() {
+      if (!streaming) return;
+      streaming.querySelector('.caret')?.remove();
+      if (streamBuffer.trim() === '') streaming.remove();
+      else streaming.classList.add('msg-interrupted');
       streaming = null;
       streamBuffer = '';
     },
@@ -214,6 +247,7 @@ export function createChatPane(root) {
 
       return new Promise((resolve) => {
         const finish = (decision) => {
+          pendingCard?.cleanup?.();
           card.remove();
           pendingCard = null;
           resolve(decision);
@@ -221,6 +255,23 @@ export function createChatPane(root) {
 
         const remember = el('input', { type: 'checkbox', id: 'remember-host' });
         const isDelete = method === 'DELETE';
+
+        const approve = el('button', {
+          class: 'btn btn-approve',
+          type: 'button',
+          // Armed after a short delay: the card appears a moment after the
+          // user pressed Enter to send, so an ordinary second Enter — or a key
+          // repeat — would otherwise land on Approve and dispatch a request
+          // nobody looked at.
+          disabled: true,
+          onclick: () => finish({ approved: true, rememberHost: remember.checked }),
+        }, 'Approve');
+
+        const deny = el('button', {
+          class: 'btn btn-deny',
+          type: 'button',
+          onclick: () => finish({ approved: false, reason: 'The user denied the request at the confirmation prompt.' }),
+        }, 'Deny');
 
         const card = el('div', { class: `confirm-card${isDelete ? ' confirm-danger' : ''}` }, [
           el('div', { class: 'confirm-head' }, [
@@ -231,6 +282,12 @@ export function createChatPane(root) {
           el('div', { class: 'confirm-url', text: maskSecrets(url, secrets) }),
           credentialUse.used?.length
             ? el('p', { class: 'confirm-cred', text: `This request will carry your stored credential${credentialUse.used.length === 1 ? '' : 's'}: ${credentialUse.used.join(', ')}. Approve only if you trust ${host} with ${credentialUse.used.length === 1 ? 'it' : 'them'}.` })
+            : null,
+          // A proxy sees the full target URL and every header, credentials
+          // included. A card naming only the target host would be asserting
+          // the opposite of where the data actually goes.
+          credentialUse.proxyHost
+            ? el('p', { class: 'confirm-cred', text: `Sent via your configured proxy ${credentialUse.proxyHost}, not directly to ${host}. That proxy sees the full URL and every header${credentialUse.used?.length ? ', including the credentials above' : ''}.` })
             : null,
           credentialUse.blocked?.length
             ? el('p', { class: 'muted', text: `Not sent (scoped to other hosts): ${credentialUse.blocked.join(', ')}.` })
@@ -251,23 +308,19 @@ export function createChatPane(root) {
             remember,
             el('span', { text: ` Auto-approve ${host} for the rest of this session` }),
           ]),
-          el('div', { class: 'confirm-actions' }, [
-            el('button', {
-              class: 'btn btn-approve',
-              type: 'button',
-              onclick: () => finish({ approved: true, rememberHost: remember.checked }),
-            }, 'Approve'),
-            el('button', {
-              class: 'btn btn-deny',
-              type: 'button',
-              onclick: () => finish({ approved: false, reason: 'The user denied the request at the confirmation prompt.' }),
-            }, 'Deny'),
-          ]),
+          el('div', { class: 'confirm-actions' }, [approve, deny]),
         ]);
 
         pendingCard = { card, finish };
         add(card);
-        card.querySelector('.btn-approve')?.focus();
+
+        // Deny takes focus, not Approve. Whatever a stray keystroke does, it
+        // must be the reversible thing.
+        deny.focus();
+        const armTimer = setTimeout(() => {
+          approve.disabled = false;
+        }, ARM_DELAY_MS);
+        pendingCard.cleanup = () => clearTimeout(armTimer);
       });
     },
 

@@ -28,9 +28,47 @@ export function createSettingsSheet(root, deps) {
   /** @type {Map<string, boolean>} Model id -> cached. */
   const cacheStatus = new Map();
 
+  /**
+   * Text typed into the "add a credential" form but not yet submitted.
+   *
+   * The sheet re-renders on every settings change — including ones triggered
+   * from elsewhere, like the async model cache probe — and a full rebuild would
+   * otherwise wipe a half-entered API token the moment anything else changed.
+   */
+  const draft = { name: '', value: '', headerName: '', hosts: '', sessionOnly: false };
+
   const set = (patch) => settings.set(patch);
 
+  /**
+   * Re-render, preserving what the user was in the middle of doing: scroll
+   * position, which control had focus, and the caret within it.
+   */
   function render() {
+    const scrollTop = root.scrollTop;
+    const activeKey = document.activeElement?.dataset?.settingsKey || null;
+    const selection = activeKey && typeof document.activeElement.selectionStart === 'number'
+      ? [document.activeElement.selectionStart, document.activeElement.selectionEnd]
+      : null;
+
+    renderInner();
+
+    root.scrollTop = scrollTop;
+    if (activeKey) {
+      const restored = root.querySelector(`[data-settings-key="${CSS.escape(activeKey)}"]`);
+      if (restored) {
+        restored.focus();
+        if (selection && typeof restored.setSelectionRange === 'function') {
+          try {
+            restored.setSelectionRange(selection[0], selection[1]);
+          } catch {
+            /* input types that reject setSelectionRange (number, checkbox) */
+          }
+        }
+      }
+    }
+  }
+
+  function renderInner() {
     const s = settings.get();
     clear(root);
 
@@ -187,25 +225,40 @@ export function createSettingsSheet(root, deps) {
       ]);
     });
 
-    const name = el('input', { type: 'text', class: 'input', placeholder: 'Name (e.g. GitHub)' });
-    const value = el('input', { type: 'password', class: 'input', placeholder: 'Secret value' });
-    const header = el('input', { type: 'text', class: 'input', placeholder: 'Auto-attach header (optional)' });
-    const hosts = el('input', { type: 'text', class: 'input', placeholder: 'Auto-attach hosts, comma-separated (optional)' });
-    const sessionOnly = el('input', { type: 'checkbox' });
+    const draftField = (key, attrs) => el('input', {
+      ...attrs,
+      class: 'input',
+      value: draft[key],
+      dataset: { settingsKey: `cred-${key}` },
+      oninput: (e) => { draft[key] = e.target.value; },
+    });
+
+    const name = draftField('name', { type: 'text', placeholder: 'Name (e.g. GitHub)' });
+    const value = draftField('value', { type: 'password', placeholder: 'Secret value' });
+    const header = draftField('headerName', { type: 'text', placeholder: 'Auto-attach header (optional)' });
+    const hosts = draftField('hosts', { type: 'text', placeholder: 'Auto-attach hosts, comma-separated (optional)' });
+    const sessionOnly = el('input', {
+      type: 'checkbox',
+      checked: draft.sessionOnly,
+      dataset: { settingsKey: 'cred-sessionOnly' },
+      onchange: (e) => { draft.sessionOnly = e.target.checked; },
+    });
 
     const add = () => {
       const created = settings.addCredential({
-        name: name.value,
-        value: value.value,
-        headerName: header.value,
-        hosts: hosts.value.split(',').map((h) => h.trim()).filter(Boolean),
-        sessionOnly: sessionOnly.checked,
+        name: draft.name,
+        value: draft.value,
+        headerName: draft.headerName,
+        hosts: draft.hosts.split(',').map((h) => h.trim()).filter(Boolean),
+        sessionOnly: draft.sessionOnly,
       });
       if (!created) {
         globalThis.alert('A credential needs a name.');
         return;
       }
-      name.value = ''; value.value = ''; header.value = ''; hosts.value = ''; sessionOnly.checked = false;
+      // Only clear the draft once the credential is safely stored.
+      Object.assign(draft, { name: '', value: '', headerName: '', hosts: '', sessionOnly: false });
+      render();
     };
 
     return group('Credentials', el('div', { class: 'stack' }, [
@@ -251,6 +304,9 @@ function section(title, children) {
  * one control in it.
  */
 function field(label, control, hint) {
+  if (control && !control.dataset?.settingsKey) {
+    control.dataset.settingsKey = `field-${label.slice(0, 40)}`;
+  }
   return el('label', { class: 'field' }, [
     el('span', { class: 'field-label', text: label }),
     control,

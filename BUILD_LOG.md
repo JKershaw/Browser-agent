@@ -237,3 +237,79 @@ added on top:
 - 393 unit tests; coverage gate green.
 - 30 Playwright scenarios across two device profiles (desktop 1280px, Pixel 7),
   all against the built single-file artifact.
+
+---
+
+## M3 adversarial review — UI and injection
+
+A reviewer told to break the UI layer, with hostile model output injected via
+the scripted-engine URL flag and hostile HTTP responses from the test server.
+
+### Critical — fixed
+
+1. **The confirmation gate could be defeated by the user's own Enter key.** The
+   card auto-focused **Approve**, and it appears a few hundred ms after Enter
+   sent the message — so the reflex second Enter, or a key repeat, dispatched a
+   request nobody looked at. Proved with a `DELETE`: the request reached the
+   server, status 200, without the user aiming at anything. The
+   always-confirm-because-irreversible case had the irreversible action on the
+   default-focused button.
+   Fixed two ways: **Deny** now takes focus, so a stray keystroke does the
+   reversible thing, and Approve stays disabled for 600 ms after the card opens.
+
+### High — fixed
+
+2. **The card lied about where a request and its credential were going.** With a
+   CORS proxy configured, the URL is rewritten *after* approval, and the card
+   named only the target host: "Approve only if you trust example.invalid with
+   it" — while the proxy host received the full URL and the token in plaintext.
+   The card now names the proxy and says explicitly that it sees every header.
+3. **Host spoofing at the decision point.** `.confirm-head strong` had no
+   `overflow-wrap`, so `https://api.github.com<200 chars>.evil.example` rendered
+   2290px wide in a 1280px viewport: the reassuring prefix visible, the
+   registrable domain off-screen, no clipping cue. Now wraps.
+
+### Medium / low — fixed
+
+4. A cancelled call left its chat card reading "sending…" forever while the log
+   correctly said "denied" — the two surfaces contradicting each other about
+   whether a request had been sent. `onTurnEnd` now settles any open card.
+5. "Auto-approve this host" ignored scheme and port, so approving
+   `https://example.com` silently authorised `http://example.com` (a plaintext
+   downgrade) and `http://example.com:8080/admin`. Keyed on full origin now.
+6. Streaming bubbles were orphaned by a repair round, a cancellation or an
+   engine error — left with a live blinking caret implying generation was still
+   running — and the *next* user message then retroactively deleted the partial
+   answer from the history. `settleStream()` finalises a bubble in place; an
+   interrupted reply is marked as such instead of being silently rewritten.
+7. The settings sheet rebuilt itself on any change, destroying half-typed input
+   (including a pasted API token), scroll position and focus. Drafts, scroll and
+   caret position now survive a re-render.
+8. Reloading the model mid-turn hid the Stop button and re-enabled the composer
+   while the turn was still running, leaving no way to cancel and running
+   `engine.load()` underneath an in-flight `generate()`. It now cancels first.
+9. Enter bypassed the disabled Send button, so a turn could be started during
+   the multi-minute first model download.
+10. A response header literally named `__proto__` was invisible in the log, the
+    export and the model's transcript — a free "hide one header from the audit
+    trail" primitive against a log that claims to hold the full story. Header
+    maps are now null-prototype. (No pollution was possible; the value was
+    simply dropped.)
+
+### Held up under attack
+
+The reviewer's executed sweep — hostile model prose, hostile final answers,
+hostile response bodies and hostile response headers, all carrying
+`<img onerror>`, `<script>` and `javascript:` payloads, viewed in both the chat
+and the log — produced zero injected nodes. The "no `innerHTML` in `src/ui/`"
+claim holds, `el()` is not attribute-injectable, and a `Location: javascript:…`
+header renders as inert text. Confirmation double-resolve and stale approval
+were both unreachable; number inputs cannot produce `NaN` or wedge a value.
+
+### Verification
+
+- 402 unit tests, 39 Playwright scenarios, all green.
+- Nine new e2e regressions cover the Enter bypass, the Approve arming delay,
+  proxy disclosure, sub-domain wrapping, the cancelled-card contradiction, caret
+  orphaning, history preservation, settings-draft survival and the pre-load
+  Enter guard.

@@ -94,8 +94,11 @@ export function isHostAllowed(host, allowlist) {
  */
 export function applyCredentials(headers, credentials = [], host = null) {
   const byName = new Map(credentials.map((c) => [String(c.name).trim().toLowerCase(), c]));
+  // Null-prototype: assigning a header literally named `__proto__` to a plain
+  // object hits the prototype setter and silently discards it, which would let
+  // a server hide a header from the log that claims to hold the full story.
   /** @type {Object<string,string>} */
-  const out = {};
+  const out = Object.create(null);
   const used = [];
   const missing = [];
   const blocked = [];
@@ -131,21 +134,44 @@ export function applyCredentials(headers, credentials = [], host = null) {
  * @param {Array<object>} credentials
  * @returns {{used: string[], blocked: string[], missing: string[], host: string}}
  */
-export function describeCredentialUse(args, credentials = []) {
+export function describeCredentialUse(args, credentials = [], proxyTemplate = '') {
+  const proxyHost = proxyHostFor(proxyTemplate);
   let host = '';
   try {
     host = new URL(args.url).hostname.toLowerCase();
   } catch {
-    return { used: [], blocked: [], missing: [], host: '' };
+    return { used: [], blocked: [], missing: [], host: '', proxyHost };
   }
   const attached = attachHostCredentials(args.headers || {}, host, credentials);
   const substituted = applyCredentials(attached.headers, credentials, host);
   return {
     host,
+    proxyHost,
     used: [...new Set([...attached.used, ...substituted.used])],
     blocked: substituted.blocked,
     missing: substituted.missing,
   };
+}
+
+/**
+ * The host a configured proxy would send through, for disclosure at the
+ * confirmation card.
+ *
+ * A proxy sees the full target URL and every header, credentials included, so
+ * a card naming only the target host is actively misleading about where the
+ * data goes.
+ *
+ * @param {string} proxyTemplate
+ * @returns {string} Empty when no usable proxy is configured.
+ */
+export function proxyHostFor(proxyTemplate) {
+  const t = String(proxyTemplate || '').trim();
+  if (t === '') return '';
+  try {
+    return new URL(t.replace('{url}', 'URL')).host;
+  } catch {
+    return t.split(/[?#/]/)[0].slice(0, 60);
+  }
 }
 
 /**
@@ -244,7 +270,7 @@ const SENSITIVE_HEADERS = new Set([
  */
 export function maskHeaders(headers, secrets = []) {
   /** @type {Object<string,string>} */
-  const out = {};
+  const out = Object.create(null);
   for (const [k, v] of Object.entries(headers || {})) {
     out[k] = SENSITIVE_HEADERS.has(k.toLowerCase()) ? MASK : maskSecrets(v, secrets);
   }
@@ -270,7 +296,7 @@ export function maskHeaders(headers, secrets = []) {
  */
 export function previewHeaders(headers, secrets = []) {
   /** @type {Object<string,string>} */
-  const out = {};
+  const out = Object.create(null);
   for (const [k, v] of Object.entries(headers || {})) {
     const value = String(v);
     const hasPlaceholder = CREDENTIAL_RE.test(value);
@@ -638,7 +664,7 @@ export async function executeCurl(args, opts = {}) {
     }
 
     /** @type {Object<string,string>} */
-    const responseHeaders = {};
+    const responseHeaders = Object.create(null);
     if (response.headers && typeof response.headers.forEach === 'function') {
       response.headers.forEach((v, k) => {
         responseHeaders[k] = v;

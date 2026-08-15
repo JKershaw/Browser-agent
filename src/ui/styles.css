@@ -201,6 +201,12 @@ body { display: flex; flex-direction: column; }
 }
 
 .msg-assistant { align-self: flex-start; }
+.msg-interrupted .msg-body::after {
+  content: " (interrupted)";
+  color: var(--fg-muted);
+  font-style: italic;
+  font-size: .85em;
+}
 .msg-repair { opacity: .8; }
 .msg-tag { font-size: .72rem; color: var(--fg-muted); margin-bottom: .15rem; }
 .msg-tag-warn { color: var(--bad); font-weight: 600; }
@@ -304,7 +310,16 @@ body { display: flex; flex-direction: column; }
 }
 
 .confirm-danger { border-color: var(--error); }
-.confirm-head { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+
+/*
+ * The host line is the security decision. A long sub-domain must wrap, not run
+ * off the edge: `api.github.comaaaa…evil.example` rendered without wrapping
+ * shows the reassuring prefix and hides the registrable domain entirely, which
+ * is a ready-made spoof.
+ */
+.confirm-head { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; }
+.confirm-head strong { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.confirm-remember span { min-width: 0; overflow-wrap: anywhere; }
 .confirm-warn { color: var(--error); font-size: .82rem; margin: .35rem 0 0; }
 .confirm-url {
   font-family: var(--mono);
@@ -325,7 +340,8 @@ body { display: flex; flex-direction: column; }
   color: var(--bad);
 }
 .confirm-more { font-size: .8rem; margin-bottom: .4rem; }
-.confirm-remember { display: flex; align-items: center; gap: .4rem; font-size: .84rem; margin: .5rem 0; }
+.confirm-remember { display: flex; align-items: flex-start; gap: .4rem; font-size: .84rem; margin: .5rem 0; }
+.confirm-remember input { flex: none; margin-top: .2rem; }
 .confirm-actions { display: flex; gap: .5rem; }
 .confirm-actions .btn { flex: 1; min-height: 2.9rem; font-weight: 600; }
 .btn-approve { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }

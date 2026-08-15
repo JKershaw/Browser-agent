@@ -55,7 +55,9 @@ export function createApp(opts = {}) {
   const log = createRequestLog();
 
   const engine = assertEngine(
-    opts.engine || (wantsMockEngine() ? createMockEngine({ script: mockScriptFromUrl(), deltaMs: 8 }) : createWebLLMEngine({ navigator: opts.navigator }))
+    opts.engine || (wantsMockEngine()
+      ? createMockEngine({ script: mockScriptFromUrl(), deltaMs: 8, loadMs: mockLoadMsFromUrl() })
+      : createWebLLMEngine({ navigator: opts.navigator }))
   );
 
   /**
@@ -155,6 +157,20 @@ export function createApp(opts = {}) {
     /** All models offered in the picker, spec tiers first. */
     tiers: MODEL_TIERS,
   };
+}
+
+/**
+ * How long the mock engine should pretend to spend loading.
+ *
+ * Lets the e2e suite hold the app in its loading state, which is where every
+ * user spends the first few minutes on a real first run.
+ *
+ * @returns {number}
+ */
+function mockLoadMsFromUrl() {
+  const raw = new URLSearchParams(globalThis.location?.search || '').get('mockLoadMs');
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 30_000) : 0;
 }
 
 /**

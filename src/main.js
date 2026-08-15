@@ -33,7 +33,9 @@ const app = createApp({
 
     onMessage: (m) => {
       if (m.role === 'user') {
-        chat.dropStream();
+        // settleStream, not dropStream: a partial answer from a previous turn
+        // is history and must not be deleted when the next message is sent.
+        chat.settleStream();
         chat.addUserMessage(m.content);
         return;
       }
@@ -64,14 +66,30 @@ const app = createApp({
       setBusy(s.running);
     },
 
-    onTurnEnd: () => {
+    onTurnEnd: ({ stopReason }) => {
       const st = app.engine.stats();
       stats.update({
         prefill: st.prefillTokensPerSecond,
         decode: st.decodeTokensPerSecond,
         tokens: st.totalTokens,
       });
-      activeCard = null;
+
+      // A turn can end between proposing a call and dispatching it — cancelled
+      // at the confirmation card, most obviously. Neither onToolResult nor
+      // onToolDenied fires then, so without this the card sits at "sending…"
+      // forever, contradicting the log entry that correctly says it never went.
+      if (activeCard) {
+        activeCard.deny(
+          stopReason === 'cancelled'
+            ? 'You stopped the turn before this request was sent.'
+            : 'The turn ended before this request was sent.'
+        );
+        activeCard = null;
+      }
+
+      // Leave any half-written reply visible and finished, rather than mid-
+      // stream with a blinking caret.
+      chat.settleStream();
     },
   },
 });
@@ -92,7 +110,9 @@ function setBusy(busy) {
 
 async function send() {
   const text = input.value.trim();
-  if (!text || app.loop.getState().running) return;
+  // Same gate as the Send button, so Enter cannot start a turn during the
+  // first model download or after a load failure.
+  if (!text || !modelLoaded || app.loop.getState().running) return;
   input.value = '';
   autoGrow();
   try {
@@ -165,6 +185,13 @@ document.addEventListener('keydown', (e) => {
 createLogView($('#log-body'), app.log);
 
 async function loadModel(modelId) {
+  // Loading underneath an in-flight generation would strand the user: the Stop
+  // button disappears while the turn is still running, and any open
+  // confirmation card would resolve against an engine that no longer exists.
+  if (app.loop.getState().running) {
+    app.loop.cancel();
+    chat.dismissConfirm();
+  }
   modelLoaded = false;
   setBusy(false);
   stats.setLoading('starting…');

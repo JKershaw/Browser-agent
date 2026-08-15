@@ -86,13 +86,27 @@ export function shouldConfirm(call, settings, session = {}, credentialUse = null
   if (credentialUse && credentialUse.used.length > 0) return true;
 
   if (!settings?.confirmBeforeSend) return false;
-  let host;
+  const origin = originOf(call?.args?.url);
+  if (origin === null) return true;
+  return !session?.autoApprovedHosts?.has(origin);
+}
+
+/**
+ * The key an auto-approval is remembered under: scheme, host **and** port.
+ *
+ * Hostname alone is too coarse. Approving `https://example.com` would then
+ * silently authorise `http://example.com` — a plaintext downgrade — and
+ * `http://example.com:8080/admin`, an entirely different service.
+ *
+ * @param {string} url
+ * @returns {string|null} Null when the URL cannot be parsed.
+ */
+export function originOf(url) {
   try {
-    host = new URL(call.args.url).hostname.toLowerCase();
+    return new URL(url).origin.toLowerCase();
   } catch {
-    return true;
+    return null;
   }
-  return !session?.autoApprovedHosts?.has(host);
 }
 
 /**
@@ -338,7 +352,7 @@ export function createAgentLoop(deps) {
 
   /** Apply the confirmation policy to one call. */
   async function decide(call, settings) {
-    const credentialUse = describeCredentialUse(call.args, settings.credentials || []);
+    const credentialUse = describeCredentialUse(call.args, settings.credentials || [], settings.proxyTemplate || '');
     if (!shouldConfirm(call, settings, session, credentialUse)) return { approved: true };
     if (typeof confirm !== 'function') {
       return { approved: false, reason: 'No confirmation handler is available, so the request was not sent.' };
@@ -359,11 +373,9 @@ export function createAgentLoop(deps) {
 
     const approved = Boolean(decision && decision.approved);
     if (approved && decision.rememberHost) {
-      try {
-        session.autoApprovedHosts.add(new URL(call.args.url).hostname.toLowerCase());
-      } catch {
-        /* unparseable URL cannot be remembered; it will simply ask again */
-      }
+      const origin = originOf(call?.args?.url);
+      // An unparseable URL cannot be remembered; it will simply ask again.
+      if (origin !== null) session.autoApprovedHosts.add(origin);
     }
     return { approved, reason: decision?.reason };
   }

@@ -216,3 +216,152 @@ test('Escape closes an open sheet', async ({ page, open }) => {
   await page.keyboard.press('Escape');
   await expect(page.locator('#settings-sheet')).toHaveAttribute('data-open', 'false');
 });
+
+test('a second Enter cannot approve the card the first Enter opened', async ({ open, page, target }) => {
+  // The card appears a few hundred ms after Enter sends the message. A reflex
+  // second Enter — or a key repeat — must not land on Approve and dispatch a
+  // destructive request nobody looked at.
+  const page_ = await open([toolCall({ method: 'DELETE', url: `${target.url}/echo` }), 'done']);
+
+  await page_.locator('#input').fill('delete the thing');
+  await page_.locator('#input').press('Enter');
+  await expect(page_.locator('.confirm-card')).toBeVisible();
+
+  // Deny holds focus, so a stray Enter refuses rather than dispatching.
+  const focused = await page.evaluate(() => document.activeElement?.className || '');
+  expect(focused).toContain('btn-deny');
+
+  await page.keyboard.press('Enter');
+  await settled(page_);
+
+  // The DELETE never went out, and the record says it was refused.
+  expect(target.received()).toHaveLength(0);
+  await expect(page_.locator('.tool-card')).toHaveClass(/tool-denied/);
+});
+
+test('Approve arms shortly after the card opens, then works normally', async ({ open, page, target }) => {
+  const page_ = await open([toolCall({ url: `${target.url}/json` }), 'done']);
+  await send(page_, 'fetch it');
+
+  const approve = page_.locator('.confirm-card .btn-approve');
+  await expect(approve).toBeDisabled();
+  await expect(approve).toBeEnabled({ timeout: 5000 });
+  await approve.click();
+  await settled(page_);
+
+  expect(target.received()).toHaveLength(1);
+});
+
+test('the card names the proxy the request will actually go through', async ({ open, page, target }) => {
+  const page_ = await open([toolCall({ url: 'https://example.invalid/x' }), 'done']);
+
+  await page_.locator('#toggle-settings').click();
+  await page_.getByPlaceholder('https://your-proxy.example/?url={url}')
+    .fill(`${target.url}/echo?url={url}`);
+  await page_.getByPlaceholder('https://your-proxy.example/?url={url}').blur();
+  await page_.locator('#close-settings').click();
+
+  await send(page_, 'fetch it');
+  const card = page_.locator('.confirm-card');
+  await expect(card).toBeVisible();
+  // Naming only the target host would assert the opposite of where data goes.
+  await expect(card).toContainText('Sent via your configured proxy');
+  await expect(card).toContainText('127.0.0.1');
+  await card.getByRole('button', { name: 'Deny' }).click();
+  await settled(page_);
+});
+
+test('a long sub-domain wraps so the real domain stays visible', async ({ open, page }) => {
+  const spoof = `https://api.github.com${'a'.repeat(200)}.evil.example/repos`;
+  const page_ = await open([toolCall({ url: spoof }), 'done']);
+  await send(page_, 'fetch it');
+
+  const head = page_.locator('.confirm-card .confirm-head strong');
+  await expect(head).toBeVisible();
+
+  // The registrable domain must be on screen, not off the right edge.
+  const box = await head.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
+  await expect(head).toContainText('evil.example');
+});
+
+test('cancelling leaves no card claiming a request is still in flight', async ({ open, page, target }) => {
+  const page_ = await open([toolCall({ url: `${target.url}/json` }), 'done']);
+  await send(page_, 'fetch it');
+  await expect(page_.locator('.confirm-card')).toBeVisible();
+  await page_.locator('#stop').click();
+  await settled(page_);
+
+  // The chat must agree with the log: nothing was sent.
+  await expect(page_.locator('.tool-card')).toHaveClass(/tool-denied/);
+  await expect(page_.locator('.tool-card')).not.toContainText('sending…');
+  expect(target.received()).toHaveLength(0);
+
+  await page_.locator('#toggle-log').click();
+  await expect(page_.locator('.log-entry').first()).toHaveClass(/log-denied/);
+});
+
+test('a repair round leaves exactly one finished bubble, with no live caret', async ({ open, page, target }) => {
+  const page_ = await open([
+    '```json\n{"tool": "curl", "args": {"url": not-json}}\n```',
+    toolCall({ url: `${target.url}/json` }),
+    'Recovered.',
+  ]);
+  await send(page_, 'fetch it');
+  await page_.locator('.confirm-card .btn-approve').click({ timeout: 5000 });
+  await settled(page_);
+
+  // A blinking caret after the turn ends implies generation is still running.
+  await expect(page.locator('.caret')).toHaveCount(0);
+});
+
+test('a partial answer survives the next message instead of being deleted', async ({ open, page }) => {
+  const page_ = await open(['one two three four five six seven eight nine ten', 'second answer']);
+  await send(page_, 'first question');
+  await settled(page_);
+
+  const first = await page_.locator('.msg-assistant').first().innerText();
+  expect(first.length).toBeGreaterThan(0);
+
+  await send(page_, 'second question');
+  await settled(page_);
+
+  // History is not rewritten: both answers are present.
+  await expect(page_.locator('.msg-assistant')).toHaveCount(2);
+  await expect(page_.locator('.msg-assistant').first()).toContainText('one two three');
+});
+
+test('typing a credential survives an unrelated settings change', async ({ open, page }) => {
+  await open(['hi']);
+  await page.locator('#toggle-settings').click();
+
+  await page.getByPlaceholder('Name (e.g. GitHub)').fill('MyToken');
+  await page.getByPlaceholder('Secret value').fill('half-typed-secret');
+
+  // Flip something else entirely — this used to wipe the form.
+  await page.getByText('Confirm before sending').click();
+
+  await expect(page.getByPlaceholder('Name (e.g. GitHub)')).toHaveValue('MyToken');
+  await expect(page.getByPlaceholder('Secret value')).toHaveValue('half-typed-secret');
+});
+
+test('Enter does nothing before the model has loaded', async ({ page, appServer }) => {
+  // mockLoadMs holds the app in its loading state long enough to press Enter
+  // while Send is still disabled — the state a real multi-minute first
+  // download puts every user in.
+  await page.goto(`${appServer.url}/?mockEngine=1&mockLoadMs=3000`);
+  await expect(page.locator('#send')).toBeDisabled();
+  await expect(page.locator('.statsbar')).toContainText('loading');
+
+  await page.locator('#input').fill('too early');
+  await page.locator('#input').press('Enter');
+
+  // The premature Enter started nothing.
+  await expect(page.locator('.msg-user')).toHaveCount(0);
+
+  // Once loaded, the same key works.
+  await expect(page.locator('#send')).toBeEnabled({ timeout: 20_000 });
+  await page.locator('#input').press('Enter');
+  await expect(page.locator('.msg-user')).toHaveCount(1);
+});

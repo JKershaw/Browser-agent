@@ -74,12 +74,12 @@ describe('shouldConfirm', () => {
   });
 
   it('skips confirmation for an auto-approved host', () => {
-    const session = { autoApprovedHosts: new Set(['api.test']) };
+    const session = { autoApprovedHosts: new Set(['https://api.test']) };
     expect(shouldConfirm(call('GET'), { confirmBeforeSend: true }, session)).toBe(false);
   });
 
   it('does not extend auto-approval to other hosts', () => {
-    const session = { autoApprovedHosts: new Set(['api.test']) };
+    const session = { autoApprovedHosts: new Set(['https://api.test']) };
     expect(shouldConfirm(call('GET', 'https://other.test/x'), { confirmBeforeSend: true }, session)).toBe(true);
   });
 
@@ -88,7 +88,7 @@ describe('shouldConfirm', () => {
   });
 
   it('always confirms DELETE on an auto-approved host', () => {
-    const session = { autoApprovedHosts: new Set(['api.test']) };
+    const session = { autoApprovedHosts: new Set(['https://api.test']) };
     expect(shouldConfirm(call('DELETE'), { confirmBeforeSend: true }, session)).toBe(true);
   });
 
@@ -267,7 +267,7 @@ describe('agent loop — confirmation and denial', () => {
     await loop.run('go');
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(exec).toHaveBeenCalledTimes(2);
-    expect(loop.getState().autoApprovedHosts).toEqual(['api.test']);
+    expect(loop.getState().autoApprovedHosts).toEqual(['https://api.test']);
   });
 
   it('still confirms DELETE on an auto-approved host', async () => {
@@ -318,9 +318,7 @@ describe('agent loop — confirmation and denial', () => {
     expect(exec).not.toHaveBeenCalled();
   });
 
-  it('does not remember a host it cannot parse', async () => {
-    // shouldConfirm returns true for an unparseable URL, so this exercises the
-    // remember path with a URL that new URL() rejects.
+  it('remembers the full origin, scheme and port included', async () => {
     const session = { autoApprovedHosts: new Set() };
     const { loop } = makeLoop({
       script: [toolCall(), 'ok'],
@@ -329,7 +327,7 @@ describe('agent loop — confirmation and denial', () => {
       session,
     });
     await loop.run('go');
-    expect([...session.autoApprovedHosts]).toEqual(['api.test']);
+    expect([...session.autoApprovedHosts]).toEqual(['https://api.test']);
   });
 });
 

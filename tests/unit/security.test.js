@@ -13,13 +13,14 @@ import {
   describeCredentialUse,
   executeCurl,
   formatResultForModel,
+  maskHeaders,
   maskSecrets,
   previewHeaders,
   redactTemplate,
   stripPartialSecretTail,
   MASK,
 } from '../../src/tools/curl.js';
-import { createAgentLoop, shouldConfirm, truncateForModel } from '../../src/agent/loop.js';
+import { createAgentLoop, originOf, shouldConfirm, truncateForModel } from '../../src/agent/loop.js';
 import { parseToolCall, stripThinking } from '../../src/agent/toolcall.js';
 import { createSettingsStore, createMemoryStorage } from '../../src/state/settings.js';
 import { createRequestLog } from '../../src/state/log.js';
@@ -82,7 +83,7 @@ describe('credential scope is enforced on every path, not just auto-attach', () 
 
 describe('auto-approving a host does not auto-approve credentialled requests to it', () => {
   const call = (headers) => ({ args: { method: 'GET', url: 'https://evil.attacker.tld/c', headers } });
-  const session = { autoApprovedHosts: new Set(['evil.attacker.tld']) };
+  const session = { autoApprovedHosts: new Set(['https://evil.attacker.tld']) };
   const settings = { confirmBeforeSend: true };
 
   it('skips the card for a plain request on a remembered host', () => {
@@ -101,7 +102,7 @@ describe('auto-approving a host does not auto-approve credentialled requests to 
     const args = { args: { method: 'GET', url: 'https://api.github.com/user', headers: {} } };
     const use = describeCredentialUse(args.args, scoped);
     expect(use.used).toEqual(['github']);
-    expect(shouldConfirm(args, settings, { autoApprovedHosts: new Set(['api.github.com']) }, use)).toBe(true);
+    expect(shouldConfirm(args, settings, { autoApprovedHosts: new Set(['https://api.github.com']) }, use)).toBe(true);
   });
 });
 
@@ -266,7 +267,24 @@ describe('the confirmation card shows what the user needs to judge the request',
   });
 
   it('copes with an unparseable URL', () => {
-    expect(describeCredentialUse({ url: 'nonsense' }, scoped)).toEqual({ used: [], blocked: [], missing: [], host: '' });
+    expect(describeCredentialUse({ url: 'nonsense' }, scoped))
+      .toEqual({ used: [], blocked: [], missing: [], host: '', proxyHost: '' });
+  });
+
+  it('names the proxy the request would actually be sent through', () => {
+    const use = describeCredentialUse(
+      { url: 'https://api.github.com/user', headers: {} },
+      scoped,
+      'https://myproxy.example/go?url={url}'
+    );
+    // The card must not say "trust api.github.com" when the data goes to a
+    // third host that sees the URL and every header.
+    expect(use.proxyHost).toBe('myproxy.example');
+    expect(use.used).toEqual(['github']);
+  });
+
+  it('reports no proxy when none is configured', () => {
+    expect(describeCredentialUse({ url: 'https://a.test/x' }, [], '').proxyHost).toBe('');
   });
 });
 
@@ -494,5 +512,79 @@ describe('masking limits are honest', () => {
 
   it('masks a three-character secret', () => {
     expect(maskSecrets('pw=abc', ['abc'])).toBe(`pw=${MASK}`);
+  });
+});
+
+describe('auto-approval is keyed on origin, not just hostname', () => {
+  const call = (url) => ({ args: { method: 'GET', url } });
+  const settings = { confirmBeforeSend: true };
+
+  it('does not carry an https approval over to http', () => {
+    const session = { autoApprovedHosts: new Set(['https://example.com']) };
+    expect(shouldConfirm(call('https://example.com/a'), settings, session)).toBe(false);
+    // A plaintext downgrade is a different origin and must ask again.
+    expect(shouldConfirm(call('http://example.com/a'), settings, session)).toBe(true);
+  });
+
+  it('does not carry an approval over to another port', () => {
+    const session = { autoApprovedHosts: new Set(['http://127.0.0.1:39373']) };
+    expect(shouldConfirm(call('http://127.0.0.1:39373/json'), settings, session)).toBe(false);
+    expect(shouldConfirm(call('http://127.0.0.1:44621/'), settings, session)).toBe(true);
+  });
+
+  it('remembers the full origin when the user ticks the box', async () => {
+    const session = { autoApprovedHosts: new Set() };
+    const loop = createAgentLoop({
+      engine: createMockEngine({
+        script: ['```json\n{"tool":"curl","args":{"url":"https://api.test:8443/x"}}\n```', 'done'],
+      }),
+      executeTool: async () => ({ ok: true, status: 200 }),
+      formatResult: () => 'x',
+      getSettings: () => ({ confirmBeforeSend: true, maxIterations: 5, credentials: [] }),
+      confirm: async () => ({ approved: true, rememberHost: true }),
+      session,
+    });
+    await loop.run('go');
+    expect([...session.autoApprovedHosts]).toEqual(['https://api.test:8443']);
+  });
+
+  it('originOf returns null for an unparseable URL', () => {
+    expect(originOf('nonsense')).toBeNull();
+    expect(originOf('https://a.test/x')).toBe('https://a.test');
+  });
+});
+
+describe('a header literally named __proto__ stays visible', () => {
+  const HIDDEN = 'THIS-HEADER-IS-INVISIBLE';
+
+  it('survives into the result, the model text and the log export', async () => {
+    const r = await executeCurl({ method: 'GET', url: 'https://api.test/x' }, {
+      // `{__proto__: x}` in a literal sets the prototype rather than an own
+      // property, so the hostile header has to be defined explicitly.
+      fetchImpl: async () => res({ headers: Object.assign(Object.create(null), { ['__pro' + 'to__']: HIDDEN, 'content-type': 'text/plain' }) }),
+    });
+    // A server must not be able to hide a header from a log that claims to
+    // hold the full story.
+    expect(Object.keys(r.headers)).toContain('__proto__');
+    expect(r.headers['__pro' + 'to__']).toBe(HIDDEN);
+
+    const log = createRequestLog();
+    const entry = log.start({ args: { method: 'GET', url: 'https://api.test/x', headers: {} } });
+    log.settle(entry.id, r);
+    expect(log.toJSON()).toContain(HIDDEN);
+  });
+
+  it('does not pollute Object.prototype', async () => {
+    await executeCurl({ method: 'GET', url: 'https://api.test/x' }, {
+      fetchImpl: async () => res({ headers: Object.assign(Object.create(null), { ['__pro' + 'to__']: HIDDEN }) }),
+    });
+    expect({}.polluted).toBeUndefined();
+    expect(Object.prototype.toString.call({})).toBe('[object Object]');
+  });
+
+  it('preserves a __proto__ header through the maskers', () => {
+    const hostile = Object.assign(Object.create(null), { ['__pro' + 'to__']: 'plain' });
+    expect(Object.keys(previewHeaders(hostile))).toContain('__proto__');
+    expect(Object.keys(maskHeaders(hostile))).toContain('__proto__');
   });
 });

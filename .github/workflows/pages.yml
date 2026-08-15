@@ -31,7 +31,13 @@ jobs:
       - run: npm run test:coverage
       - run: npm run build
 
+      # `enablement: true` turns Pages on via the API if it is not already,
+      # so a fresh fork needs no clicking through repository settings — the
+      # first push to main is the whole setup.
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

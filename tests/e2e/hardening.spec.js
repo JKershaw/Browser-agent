@@ -5,6 +5,8 @@
  * @module tests/e2e/hardening.spec
  */
 
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect, send, settled, test, toolCall } from './fixtures.js';
@@ -405,4 +407,42 @@ test('Enter does nothing before the model has loaded', async ({ page, appServer 
   await expect(page.locator('#send')).toBeEnabled({ timeout: 20_000 });
   await page.locator('#input').press('Enter');
   await expect(page.locator('.msg-user')).toHaveCount(1);
+});
+
+test('the artifact runs from a sub-path, as a project Page serves it', async ({ page, target }) => {
+  // GitHub Pages serves a project site at /<repo>/, not the root. This asserts
+  // the deploy target directly: the page is reachable only under the sub-path,
+  // and anything it tried to fetch from the root would 404 visibly.
+  const html = await readFile(join(process.cwd(), 'dist', 'index.html'));
+  const server = createServer((req, res) => {
+    if (req.url.startsWith('/Browser-agent/')) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+    } else {
+      res.writeHead(404);
+      res.end('nothing is served from the root');
+    }
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+
+  const problems = [];
+  page.on('requestfailed', (r) => problems.push(`failed ${r.url()}`));
+  page.on('response', (r) => { if (r.status() >= 400) problems.push(`${r.status()} ${r.url()}`); });
+
+  try {
+    const script = JSON.stringify([toolCall({ url: `${target.url}/json` }), 'Fetched it.']);
+    await page.goto(`http://127.0.0.1:${port}/Browser-agent/?mockEngine=1&mockScript=${encodeURIComponent(script)}`);
+    await expect(page.locator('#send')).toBeEnabled({ timeout: 20_000 });
+
+    // A full round-trip, not just a load: the tool must work from here too.
+    await send(page, 'fetch it');
+    await page.locator('.confirm-card .btn-approve').click({ timeout: 5000 });
+    await settled(page);
+    await expect(page.locator('.tool-card').first()).toHaveClass(/tool-good/);
+
+    expect(problems).toEqual([]);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
 });

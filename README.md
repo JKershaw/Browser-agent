@@ -1,166 +1,231 @@
-# Spec v2: Browser-Native AI Agent with HTTP Tool
+# Browser Agent
 
-## 1. Overview
+A chat agent that runs **entirely inside your browser** and can make HTTP
+requests on your behalf — with your approval, one request at a time.
 
-A single-page web application providing a chat interface to an in-browser LLM (WebLLM / WebGPU) acting as an agent with exactly one tool: an HTTP request tool ("curl") built on the browser's `fetch` API. Everything runs client-side; there is no backend. The deliverable is a **single self-contained HTML file** suitable for hosting on GitHub Pages or any static host, and openable on desktop and mobile browsers.
+There is no backend. The language model runs on your GPU via WebGPU, the
+requests go out from your browser, and nothing you type is sent anywhere except
+in the HTTP calls you explicitly approve. The whole app is a single HTML file
+you can host anywhere static.
 
-**Goals:** trivially deployable (one file, static hosting), usable on a phone, transparent about what it's doing (requests, errors, stats), test-driven, well-documented.
+- **What it is:** a chat window, an in-browser LLM, and exactly one tool — an
+  HTTP request builder ("curl").
+- **What it is for:** poking at APIs, fetching things, and seeing precisely what
+  an agent is doing while it does it.
+- **What it is not:** a general assistant. The models that fit in a browser are
+  small. Keep the asks concrete.
 
-**Non-goals (v1):** offline operation (model weights stream from HuggingFace CDN at runtime and are cached by the browser), multi-tool support, conversation persistence across sessions, non-WebGPU fallback inference.
+---
 
-## 2. Deployment & environment
+## Requirements
 
-### 2.1 Serving
-- **Primary: static HTTPS hosting** (GitHub Pages or equivalent). The built `index.html` requires no headers, no server config, no companion files. Specifically: no COOP/COEP / cross-origin-isolation requirements (a reason WebGPU-only WebLLM is chosen over WASM-threaded alternatives).
-- **Local dev:** `npm run dev` (Vite) and `npx serve dist/` both work.
-- **`file://` (double-click): best-effort.** The app must load and run, but browser model caching is unreliable on file origins and the model may re-download per session. The UI shows a one-line notice when running from `file://` recommending a static server or the hosted URL.
+| | |
+|---|---|
+| **Desktop** | Chrome or Edge 113+. Fully supported. |
+| **Android** | Chrome with WebGPU (121+), on a reasonably recent device. Supported with the small model. |
+| **Firefox / Safari** | Run if their WebGPU works. Not test targets. |
+| **iOS Safari** | Best-effort. WebGPU availability and memory limits vary. |
+| **Disk / network** | 0.4–2.5 GB of model weights download on first use, then cached by the browser. |
 
-### 2.2 Browsers & devices
-- **Desktop:** Chromium 113+ (Chrome/Edge) fully supported. Firefox/Safari: run if their WebGPU works; not test targets for v1.
-- **Mobile:** Android Chrome (WebGPU stable) supported with the small-model profile (§4.2). iOS Safari: best-effort (WebGPU availability and memory limits vary; capability check governs).
-- **Capability gate:** on load, detect WebGPU + estimate available memory (`navigator.deviceMemory`, adapter limits). If WebGPU is missing, show an explanatory screen (what it is, how to enable, which browsers work) — never a blank page or console-only failure. If memory looks tight, pre-select a smaller model and say why.
-- **Responsive UI is a requirement, not a nicety:** the chat, confirmation cards, settings, and log must be fully usable on a phone screen (§8).
+If WebGPU is missing you get a screen explaining what that is, why it matters,
+and how to turn it on in your browser — never a blank page.
 
-## 3. Architecture
+---
 
-```
-src/
-  agent/loop.js          # agent iteration loop, tool dispatch, cap enforcement
-  agent/toolcall.js      # tool-call parsing, validation, repair
-  tools/curl.js          # fetch wrapper: headers, auth, proxy, timeouts, errors
-  llm/engine.js          # engine interface (see 4.3)
-  llm/webllm.js          # WebLLM implementation of the interface
-  state/settings.js      # settings store (localStorage-backed)
-  state/log.js           # request/response log
-  ui/                    # DOM components (chat, settings, stats bar, log)
-index.html               # built artifact: single file, everything inlined
-```
+## Deploy it yourself in two minutes
 
-- Modules are pure/DI-friendly where possible so they unit-test without a browser.
-- Build: Vite + single-file plugin producing one self-contained `index.html`. Web workers inlined via blob URLs. No runtime dependencies beyond the WebLLM package (bundled) and the model CDN.
+1. **Fork this repository.**
+2. **Settings → Pages → Source: GitHub Actions.** The included workflow builds
+   and publishes on every push to `main`.
+3. **Open the URL it gives you** — `https://<your-user>.github.io/Browser-agent/`.
+   It works the same on a phone.
 
-## 4. Model layer
+The first load downloads the model. Subsequent loads are seconds.
 
-### 4.1 Engine
-- Backend: **WebLLM** (`@mlc-ai/web-llm`). Rationale (researched Aug 2026): purpose-built for in-browser LLM chat, OpenAI-compatible API with streaming and JSON-mode, fastest decode among browser runtimes, curated MLC model catalog, and no cross-origin-isolation requirement — which keeps single-file static hosting trivial.
-- Known limitation accepted for v1: WebLLM's catalog lags the newest architectures (e.g. Qwen3.5/Gemma 4 not yet compiled); the Qwen3 line it does have is sufficient.
+Prefer to host it elsewhere? `npm ci && npm run build` produces
+`dist/index.html`. That one file is the entire app: drop it on any static host,
+or open it directly from disk.
 
-### 4.2 Models
-One model family across all tiers so chat template and tool-calling behavior stay consistent:
+> Opening the file from `file://` works, but browsers do not cache model weights
+> reliably on file origins, so the model may re-download every session. The app
+> shows a notice when it detects this.
 
-| Tier | Model | Approx. download | Used for |
-|---|---|---|---|
-| Default (desktop) | Qwen3-4B-Instruct (MLC, q4) | ~2.5 GB | primary UX |
-| Small (mobile / low-mem) | Qwen3-1.7B (MLC, q4) | ~1 GB | auto-suggested on constrained devices |
-| Tiny (tests) | Qwen3-0.6B (MLC, q4) | ~0.4 GB | e2e suite; selectable by users who just want fast |
+---
 
-- Model picker in settings lists these three plus any WebLLM prebuilt the user pins by ID (free-text advanced field).
-- Qwen3 hybrid thinking mode: disabled by default via chat-template flag (`/no_think` or generation config) to keep tool loops fast; a settings toggle exposes it.
-- First-run download progress (percent + MB) is prominent; cache status ("cached, loads in seconds") shown per model.
+## Local development
 
-### 4.3 Engine interface (future-proofing)
-`engine.js` defines the contract: `capabilities()`, `load(modelId, onProgress)`, `generate(messages, options)` (streaming), `stats()`, `unload()`. WebLLM is the only v1 implementation. Documented-but-unbuilt future implementations: Transformers.js v4 (broader model catalog; would require revisiting the no-isolation-headers guarantee) and Chrome's built-in Prompt API (zero-download Gemini Nano; Chrome-only, quality TBD). The agent loop and UI depend only on the interface.
-
-## 5. Tool calling
-
-### 5.1 Contract
-Tool calls are requested via system prompt instructing the model to emit a single fenced JSON block:
-
-```json
-{"tool": "curl", "args": {"method": "GET", "url": "https://...", "headers": {}, "body": null}}
+```bash
+npm ci
+npm run dev            # Vite dev server
+npm test               # unit tests
+npm run test:coverage  # unit tests + coverage gate
+npm run build          # produces the single-file dist/index.html
+npm run serve:dist     # serve that file, exactly as it will be hosted
 ```
 
-WebLLM's native function calling is still WIP upstream; the JSON-block contract is the required path for v1 and the abstraction native calling would normalize into later.
+Running the tests is covered in [Testing](#testing) below.
 
-### 5.2 Parsing & repair (`toolcall.js`)
-- Extract candidate JSON (fenced block preferred; fallback to first balanced `{...}`); strip any thinking-mode preamble.
-- Validate against schema: method whitelist, well-formed http(s) URL, headers as string→string map, body string|null.
-- On failure: one automatic repair retry re-prompting the model with the specific error. On second failure, surface raw output as a normal message plus a visible "tool call failed to parse" notice.
-- Pure module (string in → result object out); the primary unit-test target (~100% branch coverage).
+---
 
-### 5.3 Agent loop (`loop.js`)
-- Max tool iterations per user message: configurable, default 5, hard cap 10.
-- Iteration: generate → if tool call, execute (subject to confirmation §7) → append result → continue; plain text ends the turn.
-- Tool results truncated to a configurable byte limit (default 8 KB) with an explicit "truncated" marker.
-- Loop state (iteration count, pending confirmation) is inspectable for tests.
+## Using it
 
-## 6. The curl tool
+Type what you want. If the agent needs to fetch something, it proposes a
+request and you get a card showing the method, the full URL, any headers and the
+body. Approve it, deny it, or tick "auto-approve this domain for this session".
 
-### 6.1 Capabilities
-- Methods: GET, POST, PUT, PATCH, DELETE, HEAD.
-- Custom headers including `Authorization` (credential handling §7).
-- Body: raw string (model JSON-encodes; UI pretty-prints JSON).
-- Timeout via `AbortController`: configurable, default 30 s.
-- Result to model: status, status text, selected response headers, truncated body, elapsed ms.
+Each request appears in the chat as a card you can expand, and in the **request
+log** with full detail. The log exports as JSON — with credentials masked — which
+is the right thing to attach to a bug report.
 
-### 6.2 CORS & proxy
-- Direct `fetch` by default. Optional **CORS proxy URL template** in settings, e.g. `https://myproxy.example/?url={url}`; when set, requests are rewritten through it. Off by default. No bundled proxy in v1.
+The **stats bar** shows the current model, prefill and decode speed, tokens used,
+the last request's latency, and a live iteration counter.
 
-### 6.3 Error surfacing (first-class requirement)
-Every failure mode produces a distinct, human-readable explanation in both the tool result (for the model) and the log (for the user):
-- **Network/CORS failure** (`fetch` TypeError): explain this is usually CORS, state whether a proxy is configured, suggest one if not; be honest that the browser hides the true cause.
-- **Timeout:** show the configured limit.
-- **HTTP error status:** passed through as data, not treated as tool failure.
-- **Invalid URL / blocked scheme:** only `http:`/`https:`; rejected before dispatch.
-Errors are never swallowed; the model receives a structured error object it can react to.
+### Keyboard
 
-## 7. Security & auth
+| Key | Does |
+|---|---|
+| `Enter` | Send (desktop only — on a touch keyboard it inserts a newline) |
+| `Shift`+`Enter` | Newline |
+| `Esc` | Close the settings or log sheet |
 
-- **Confirm-before-send: ON by default.** Each tool call renders a card (method, full URL, headers with credential values masked, body) with Approve / Deny / "auto-approve this domain this session." DELETE always requires confirmation even on auto-approved domains. Deny returns a structured "user denied" result to the model.
-- **Credentials:** named entries (name → header name + value) in settings. Stored in `localStorage` with a permanent plaintext-storage warning; per-credential "session only" option keeps it in memory. Masked everywhere with click-to-reveal.
-- Optional domain allowlist (off by default; when non-empty, out-of-list requests auto-denied).
-- Note in docs: on a public GitHub Pages URL the app is same-origin for everyone; credentials still never leave the visitor's own browser except in the HTTP calls they approve.
+---
 
-## 8. UI
+## Settings reference
 
-Single screen, responsive (desktop three-region layout; phone: chat full-screen, settings and log as slide-over sheets):
-1. **Chat pane:** streaming messages; tool calls as collapsible cards (request → status → response preview); errors visually distinct. Confirmation cards are thumb-friendly on mobile.
-2. **Settings sheet:** model picker + download progress + cache status, thinking-mode toggle, temperature, max iterations, timeout, truncation size, proxy URL, credentials, allowlist, confirm-before-send toggle.
-3. **Stats bar:** current model, prefill/decode tok/s (from WebLLM), tokens this conversation, last tool latency, live iteration counter.
-4. **Request log:** chronological, full detail (credentials masked), exportable JSON.
+| Setting | Default | What it does |
+|---|---|---|
+| **Model** | Qwen3 4B, or 1.7B on a constrained device | Which model to load. Download size and cache status are shown per model. |
+| **Advanced: model id** | — | Pin any model from WebLLM's prebuilt catalog by id. |
+| **Thinking mode** | off | Lets Qwen3 reason before answering. Roughly triples the latency of every tool round-trip. |
+| **Temperature** | 0.6 | Sampling temperature, 0–2. |
+| **Max tokens per reply** | 1024 | Generation limit per reply. |
+| **Max tool calls per message** | 5 | How many requests the agent may send for one message. Hard-capped at 10. |
+| **Timeout** | 30 s | Per-request timeout. |
+| **Response size limit** | 8 kB | Responses are cut here and the model is told they were truncated. |
+| **CORS proxy URL template** | empty | See [CORS](#cors-and-proxies). |
+| **Confirm before sending** | **on** | Show an approve/deny card for every request. |
+| **Domain allowlist** | empty | When non-empty, requests to any other host are refused before being sent. |
+| **Credentials** | none | Named secrets. See [Credentials](#credentials). |
 
-Design: clean, minimal, keyboard-friendly on desktop (Enter to send, Esc closes sheets); dark/light via `prefers-color-scheme`. Vanilla JS or a micro-library; no framework requirement.
+Settings are saved in your browser's `localStorage`. If that is unavailable
+(private mode, full quota) the app keeps working and tells you the settings
+apply for this session only.
 
-## 9. Testing
+---
 
-### 9.1 Unit (Vitest, no browser)
-- `toolcall.js`: valid calls, malformed JSON, prose- and thinking-wrapped JSON, schema violations, repair flow.
-- `curl.js`: mocked `fetch` — header assembly, credential injection, proxy rewriting, timeout abort, each error class → its message.
-- `loop.js`: fake engine — iteration cap, denial handling, truncation, termination.
-- `settings.js`: persistence, session-only credentials, defaults/migrations.
+## CORS and proxies
 
-### 9.2 E2E (Playwright, local, real model)
-- Runs against the built `index.html` served by a local static server, in Chromium, **with the real Qwen3-0.6B via WebLLM** — effectively free, just slow. Invoked via `npm run test:e2e`; excluded from default CI.
-- Model cache persisted between runs via a persistent browser profile.
-- The harness starts a local HTTP test server (permissive CORS) as the tool's target — deterministic, no external dependencies.
-- Scenarios:
-  1. Cold start: model loads (download or cache), chat answers "hello."
-  2. Tool round-trip: prompt induces a GET to the test server; confirmation card appears; approve; response reaches chat and log.
-  3. Denial path: deny; model receives and acknowledges the structured denial.
-  4. Error surfacing: request to a dead port → network/CORS explanation rendered.
-  5. Iteration cap: server that keeps prompting follow-ups → loop halts at cap with visible notice.
-  6. Mobile viewport smoke: scenario 2 repeated at a phone-sized viewport; confirmation card usable.
-- Assertions on model text are loose (shape/presence); assertions on UI state, log entries, and test-server receipts are strict.
+Most of the internet will refuse a request from a web page it does not know.
+That is CORS, it is the browser enforcing it, and **the browser deliberately
+does not tell the page why a request failed**. The app is honest about this
+rather than guessing: a failed request explains that CORS is the usual cause,
+says whether a proxy is configured, and lists the other possibilities.
 
-### 9.3 TDD expectation
-Modules in §3 are written test-first; commits pair tests with implementation; unit suite gates the build.
+APIs that send `Access-Control-Allow-Origin` work directly, with no setup.
 
-## 10. Documentation
+For anything else you need a CORS proxy. **None is bundled** — a proxy sees every
+request you send through it, so which one to trust is your call, not ours. Set
+the template in settings:
 
-- `README.md`: what it is; browser/device requirements; the two-minute deploy (fork → enable Pages → open URL, including on a phone); local quickstart; settings reference; the CORS story and proxy setup; security notes (plaintext storage, what never leaves the browser); running unit and e2e tests; known limitations (no offline, `file://` caching caveat, iOS best-effort).
-- `ARCHITECTURE.md`: module map, engine interface contract, agent-loop sequence diagram, tool-call JSON schema verbatim, error taxonomy.
-- `docs/prompts.md`: system prompt and repair prompt verbatim — prompt text is load-bearing.
-- JSDoc on all exported functions.
+```
+https://your-proxy.example/?url={url}
+```
 
-## 11. Milestones
+`{url}` is replaced with the percent-encoded target. A template with no `{url}`
+is treated as a prefix (`https://proxy.example/` + `https://target/`), which is
+the convention some proxies use.
 
-1. **M1 — Core loop headless:** engine interface + WebLLM impl, toolcall parser, curl tool, agent loop; unit tests green; bare debug page. Includes a quick tool-call reliability check of Qwen3-4B vs 1.7B vs 0.6B to validate the tier table.
-2. **M2 — UI:** chat, settings, stats, log, confirmation flow; responsive layouts.
-3. **M3 — Hardening:** full error taxonomy, truncation, allowlist, session credentials, capability gate, `file://` notice.
-4. **M4 — E2E + ship:** Playwright suite, single-file build, GitHub Pages deploy workflow, README/ARCHITECTURE.
+---
 
-## 12. Open questions
+## Credentials
 
-- Whether to auto-select the small model on mobile silently vs. always asking (lean: pre-select + one-line explanation, user can override).
-- Log retention: in-memory only vs. persisted (lean in-memory for v1).
-- Whether the advanced free-text model-ID field ships in v1 or M-next (lean v1; it's cheap and useful).
+Store a secret once and let the model use it without ever seeing it.
+
+1. Add a credential in settings: a **name**, a **value**, and optionally a header
+   name plus hosts to attach it to automatically.
+2. The model is told the *name* only. It writes a placeholder:
+
+   ```json
+   {"headers": {"Authorization": "Bearer {{GitHub}}"}}
+   ```
+
+3. Your browser substitutes the real value immediately before sending.
+
+Some deliberate properties:
+
+- **The model never sees a secret** — only the placeholder.
+- **A credential with hosts set is withheld everywhere else**, and the
+  confirmation card tells you when that happened.
+- **Any request carrying a credential always asks first**, even with
+  confirm-before-send off and even on an auto-approved domain. Leaking a
+  long-lived token is as irreversible as a DELETE.
+- **Credentials are masked everywhere** — the confirmation card, the chat, the
+  log, the export — with click-to-reveal in settings.
+
+### Security notes, plainly
+
+- **Persistent credentials are stored in `localStorage` in plain text.** Anyone
+  with access to this browser profile can read them. Use **session only** for
+  anything sensitive: those live in memory and vanish when you close the tab.
+- **Nothing leaves your browser except the requests you approve.** No telemetry,
+  no analytics, no backend.
+- **On a public URL, the app is same-origin with every other page on that host.**
+  On GitHub Pages that means every other project on `<user>.github.io`. Your
+  credentials still never leave your own browser, but if that shared origin
+  bothers you, host it somewhere dedicated or use session-only credentials.
+- **The model's output is untrusted.** Anything the agent fetches can try to
+  steer it — this is prompt injection, it is real, and it is why the
+  confirmation card exists and why credential scope is enforced at send time.
+  Read the card before approving.
+
+---
+
+## Testing
+
+```bash
+npm test               # unit tests (no browser needed)
+npm run test:coverage  # with the 90% coverage gate
+npm run test:e2e       # Playwright, against the built dist/index.html
+npm run test:e2e:real  # the same, driving the real Qwen3-0.6B model
+```
+
+Both e2e commands rebuild `dist/index.html` first, because they test the built
+artifact rather than the dev server. They start their own local servers, so
+`test:e2e` needs no network at all.
+
+`test:e2e:real` needs a working WebGPU device and downloads ~0.4 GB. It is
+excluded from CI for that reason.
+
+There is also `node scripts/model-check.js`, which compares tool-call
+reliability across the three model tiers. It needs a GPU.
+
+---
+
+## Known limitations
+
+- **No offline operation.** Model weights stream from HuggingFace's CDN on first
+  use. After that the browser cache handles it, but the first run needs network.
+- **`file://` caching is unreliable.** The app runs, but the model may
+  re-download each session. Use a static server.
+- **iOS is best-effort.** WebGPU availability and memory limits vary by version
+  and device.
+- **One tool.** HTTP requests, nothing else.
+- **Small models make mistakes.** They occasionally produce a malformed tool
+  call — the app asks them to correct it once, then shows you the raw output
+  rather than pretending.
+- **No conversation persistence.** Reload and you start fresh. The request log
+  is in-memory only, by design.
+
+---
+
+## How it works
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the module map, the engine contract,
+the agent-loop sequence, the tool-call schema and the error taxonomy;
+[docs/prompts.md](docs/prompts.md) for every prompt verbatim; [SPEC.md](SPEC.md)
+for the original design brief; and [BUILD_LOG.md](BUILD_LOG.md) for how it was
+built, including what the adversarial reviews found.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).

@@ -1,0 +1,461 @@
+# Build log
+
+Chronological record of building the project described in [`SPEC.md`](SPEC.md).
+Each milestone ends with an adversarial review whose findings are recorded here
+and fixed before the milestone is closed.
+
+---
+
+## M1 — Core loop headless
+
+**Goal (SPEC §11.1):** engine interface + WebLLM implementation, tool-call
+parser, curl tool, agent loop; unit tests green; bare debug page.
+
+### Built
+
+| Module | Purpose |
+|---|---|
+| `src/agent/toolcall.js` | Extract, validate, normalise and repair model tool calls. Pure. |
+| `src/agent/prompts.js` | System / repair / denial / cap prompt text. |
+| `src/agent/loop.js` | Iteration loop, cap enforcement, confirmation policy, repair round. |
+| `src/tools/curl.js` | `fetch` wrapper: proxy, credentials, timeout, byte-capped streaming read, error taxonomy. |
+| `src/llm/engine.js` | Engine contract + `detectCapabilities` (WebGPU/memory gate). |
+| `src/llm/webllm.js` | WebLLM implementation, model tiers, default-model selection. |
+| `src/llm/mock.js` | Scripted engine for unit tests and GPU-less e2e. |
+| `src/state/settings.js` | localStorage-backed settings, session-only credentials, migrations. |
+| `src/state/log.js` | In-memory request log with masking and JSON export. |
+| `src/app.js` | Composition root (no DOM). |
+| `src/debug.js` + `index.html` | Bare debug page. |
+
+### Verification
+
+- **289 unit tests pass** (`npm test`).
+- **Coverage: 97.7% statements, 94.0% branches** against a 90% gate.
+- `npx vite build` produces a single self-contained `dist/index.html` (6.1 MB, 2.2 MB gzip) with no sibling assets.
+
+### Decisions and deviations from the spec
+
+1. **Tool results are fed back as `user`-role messages**, not a `tool` role.
+   The JSON-block contract (§5.1) does not use native function calling, and
+   small chat templates handle a plain user turn far more reliably. The
+   `TOOL RESULT` marker is named in the system prompt so the model can see the
+   boundary.
+2. **Credentials use `{{name}}` placeholders.** The model writes the
+   placeholder; `curl.js` substitutes the secret immediately before dispatch.
+   The consequence is that a stored secret never enters the model's context,
+   which is stronger than §7 requires.
+3. **Spec §4.1 is now stale.** It justifies Qwen3 on the grounds that
+   "Qwen3.5/Gemma 4 [are] not yet compiled". As of `@mlc-ai/web-llm` 0.2.84 the
+   catalog *does* contain `Qwen3.5-2B/4B/9B`. The spec'd Qwen3 tiers remain the
+   defaults (they are what the tier table was written against, and all three are
+   flagged `low_resource_required`), and the Qwen3.5 builds are offered in the
+   picker as an opt-in.
+4. **Object bodies are accepted and serialised** rather than rejected. Models
+   routinely emit `"body": {...}` instead of a string; burning a repair round on
+   it helps nobody.
+5. **`GET`/`HEAD` with a non-null body is rejected** (`E_BODY_NOT_ALLOWED`)
+   rather than silently stripped, so the repair round can correct the model's
+   intent instead of hiding it.
+
+### Bugs found and fixed during M1
+
+- **Cancelling with a confirmation card open hung the turn forever.** The loop
+  awaited the UI's promise unconditionally; a user pressing stop left `running`
+  true and the app wedged. Fixed by racing the confirmation against the abort
+  signal (`abortedDecision()`), with a regression test.
+- **Body-cap truncation flag was wrong on a chunk boundary.** Caught by test;
+  the implementation was correct and the test expectation was fixed.
+
+---
+
+## M1 adversarial review
+
+Three independent reviewers, each told to break the code rather than praise it:
+a **security** pass (threat model: the model's output is untrusted and may be
+prompt-injected by fetched content), a **correctness** pass, and a
+**spec-compliance** audit. All three proved their findings by executing code.
+The 319 tests passing at the time caught none of them.
+
+### Critical — fixed
+
+1. **A stored credential could be exfiltrated to any host.**
+   `applyCredentials` matched credentials by name only, ignoring the `hosts`
+   scope that `attachHostCredentials` enforced — and the system prompt hands the
+   model every credential *name*. An injected page could therefore make the
+   model emit `{"headers": {"X-Z": "{{github}}"}}` pointed at an attacker and the
+   token went with it. `hosts` is now enforced on both paths; a withheld
+   credential is reported as `credentialsBlocked` and shown on the card.
+
+2. **`stripThinking` could delete the entire reply.** A stray `</think>` — which
+   Qwen3 produces routinely by doubling its closing tag — caused everything
+   before it to be dropped. The user got a blank bubble; a tool call in that
+   reply vanished with no repair round and no notice. Stray closers now have the
+   tag removed and all content kept.
+
+3. **An illustrative code fence was dispatched as a real request.** The fence
+   scanner skipped a ```js block, then the raw-text fallback found the `{`
+   *inside the block it had just rejected*. A model explicitly declining to make
+   a request ("You would write: … But I will not do that.") had that request
+   proposed anyway. Fence spans are now excluded from the fallback scan.
+
+### High — fixed
+
+4. **Response headers were never masked**, so a server reflecting a credential
+   into a header (`Location: /next?leak=<token>`) fed it to the model, the chat
+   card, the log and the export. Masked in all four now.
+
+5. **A cross-host redirect carried credentials off-site.** The redirect check ran
+   only when an allowlist was configured — which is not the default — and the
+   browser strips only `Authorization`/`Cookie`, so an author-set `X-Api-Key`
+   followed the redirect. Any credentialled request redirected to a different
+   host is now discarded with an explanation that says to rotate the credential.
+
+6. **Auto-approving a host auto-approved credentialled requests to it.** The
+   natural flow — read an attacker's page, approve once, tick "auto-approve" —
+   let injected instructions attach a stored token to a follow-up with no
+   prompt. A request that would use a credential now always shows the card.
+
+7. **Denials never reached the log.** `app.js` looked for "the last pending
+   entry", but a denied call is refused *before* dispatch, so no entry existed;
+   with a stale pending entry it marked the *wrong* request denied. The entry is
+   now opened when a call is proposed and settled, denied or released explicitly.
+
+### Medium / low — fixed
+
+8. Auto-attached credentials were invisible at confirmation time; the card now
+   names them via `describeCredentialUse`.
+9. The confirmation card masked `{{placeholders}}` — hiding exactly the
+   information needed to judge a request, and specifically for `Authorization`.
+   `previewHeaders` now shows placeholders and masks only real secrets.
+10. An allowlist plus a proxy failed *every* request as `blocked_redirect`
+    (the observed final URL is the proxy's), pushing users to disable the
+    allowlist. The post-hoc check is skipped when proxied.
+11. The proxy template — which often carries the user's own proxy API key —
+    was echoed into the model's context and the log. Now redacted.
+12. Plaintext secrets rode along in the result object; `JSON.stringify` of a
+    hook payload or transcript entry leaked everything. `headers` and `body` on
+    the result are pre-masked and the raw values are non-enumerable.
+13. Session-only credentials could be written to disk two ways: round-tripping
+    `get().credentials` through `set()`, and a patch key explicitly set to
+    `undefined`. The invariant is now enforced in `sanitize` itself.
+14. `totalTokens` double-counted whenever a stream carried no usage chunk, and
+    never reset across model switches.
+15. **The thinking-mode toggle did nothing.** It reached the prompt text but not
+    `engine.generate`, so reasoning was always disabled. Plumbed through the
+    engine contract.
+16. A throw from the tool or the confirmation handler ended a turn with no
+    `stopReason` and no `onTurnEnd`; both are now caught as `TOOL_ERROR`.
+17. One abort listener leaked per confirmation card.
+18. Refusals consumed the tool-call budget and the cap notice then claimed the
+    agent "made 3 tool calls" when it had sent none. Refusals are counted
+    separately and reported honestly.
+19. An unparseable numeric setting reset the preference to its factory default
+    instead of keeping the current value.
+20. `clampIterations(0)` returned 5; it now clamps into range.
+21. SPEC §5.3 truncation was only enforced inside the tool, not on the tool
+    *result*; `truncateForModel` now bounds what reaches the transcript.
+
+### Accepted, not changed
+
+- `generate` streams via an `onDelta` callback and returns the final string,
+  rather than being an async iterator. §4.3 says "streaming" without fixing the
+  shape; the callback form is what the UI needs.
+- Very short secrets (< 3 characters) are documented as unmaskable rather than
+  half-masked — masking them would replace ordinary substrings everywhere.
+
+**50 regression tests** covering every finding above live in
+`tests/unit/security.test.js`, named after the finding they pin down.
+
+---
+
+## M2 — UI
+
+Chat pane, settings sheet, stats bar, request log and the confirmation flow, in
+vanilla JS with no framework.
+
+- **No `innerHTML` anywhere in `src/ui/`.** Model output, response bodies and
+  header values are all attacker-influenceable, so `ui/dom.js` is the only
+  element factory and it sets text via `textContent` exclusively.
+- Mobile-first CSS: the phone layout is the base, and one `min-width: 60rem`
+  breakpoint promotes the settings and log sheets into a permanent side rail.
+- Successful tool cards collapse to their summary line; failures stay open.
+  Response headers show the notable ones with the rest behind a disclosure.
+- Confirmation cards are full-width and thumb-sized on a phone, name any
+  credential the request would carry, and show placeholders rather than masking
+  them.
+
+### Verification
+
+- **371 unit tests**, 12 Playwright scenarios green against the built artifact.
+- Screenshots checked at 1280×860 (light and dark) and 390×844 (mobile).
+
+---
+
+## M3 — Hardening
+
+Spec §11.3 items, most of which landed during the M1 review fix pass. What M3
+added on top:
+
+- **`scripts/model-check.js`** — the tool-call reliability comparison SPEC §11.1
+  asks for, as a runnable harness. It drives the built artifact in a real
+  browser across the three tiers and reports first-try calls, repairs, hard
+  failures and spurious calls. **It has not been run:** WebLLM is WebGPU-only
+  and this build machine has no GPU adapter, so the script exits with a clear
+  error rather than reporting zeros. The unverified "best tool-calling
+  reliability" claim has been removed from the tier table until someone runs it
+  on a GPU.
+- **`scripts/serve-dist.js`** — `npm run serve:dist` was advertised in
+  `package.json` and did not exist.
+- **The mock engine announces itself.** `?mockEngine=1` ships in the artifact so
+  the e2e suite can drive the real deliverable; it now posts a warning notice so
+  scripted replies can never be mistaken for the model.
+- **Coverage gate is honest and green.** `app.js` had no tests at all while the
+  gate claimed to cover it; 20 tests later the thresholds pass for real
+  (96.8% statements, 90.4% branches, exit code 0).
+- `readBodyCapped` reports `bytes: null` rather than a magic `-1` when a
+  truncated read genuinely does not know the size.
+
+### Bugs found by the M3 e2e suite
+
+1. **The app shell rendered behind the WebGPU capability gate.** `#app[hidden]`
+   stayed visible because `.app { display: flex }` outranks the UA's
+   `[hidden] { display: none }`. The gate is supposed to replace the app, and
+   instead it stacked with it — exactly the "never a blank page or a
+   console-only failure" case §2.2 calls out. Fixed with an explicit
+   `[hidden] { display: none !important }`.
+2. **Buttons inside composite settings groups had garbage accessible names.**
+   `field()` wrapped the whole credentials block in a `<label>`, so the first
+   control in it — the "Reveal" button — was announced as the entire section
+   including the plaintext-storage warning. Composite groups now use
+   `role="group"` with `aria-labelledby` instead of an implicit label.
+3. **Tap-outside-to-close was impossible on a phone.** The sheet was full-width,
+   putting the scrim entirely behind it, so the only exit was the Close button.
+   Sheets now stop 3rem short of the edge — the standard nav-drawer affordance.
+
+### Verification
+
+- 393 unit tests; coverage gate green.
+- 30 Playwright scenarios across two device profiles (desktop 1280px, Pixel 7),
+  all against the built single-file artifact.
+
+---
+
+## M3 adversarial review — UI and injection
+
+A reviewer told to break the UI layer, with hostile model output injected via
+the scripted-engine URL flag and hostile HTTP responses from the test server.
+
+### Critical — fixed
+
+1. **The confirmation gate could be defeated by the user's own Enter key.** The
+   card auto-focused **Approve**, and it appears a few hundred ms after Enter
+   sent the message — so the reflex second Enter, or a key repeat, dispatched a
+   request nobody looked at. Proved with a `DELETE`: the request reached the
+   server, status 200, without the user aiming at anything. The
+   always-confirm-because-irreversible case had the irreversible action on the
+   default-focused button.
+   Fixed two ways: **Deny** now takes focus, so a stray keystroke does the
+   reversible thing, and Approve stays disabled for 600 ms after the card opens.
+
+### High — fixed
+
+2. **The card lied about where a request and its credential were going.** With a
+   CORS proxy configured, the URL is rewritten *after* approval, and the card
+   named only the target host: "Approve only if you trust example.invalid with
+   it" — while the proxy host received the full URL and the token in plaintext.
+   The card now names the proxy and says explicitly that it sees every header.
+3. **Host spoofing at the decision point.** `.confirm-head strong` had no
+   `overflow-wrap`, so `https://api.github.com<200 chars>.evil.example` rendered
+   2290px wide in a 1280px viewport: the reassuring prefix visible, the
+   registrable domain off-screen, no clipping cue. Now wraps.
+
+### Medium / low — fixed
+
+4. A cancelled call left its chat card reading "sending…" forever while the log
+   correctly said "denied" — the two surfaces contradicting each other about
+   whether a request had been sent. `onTurnEnd` now settles any open card.
+5. "Auto-approve this host" ignored scheme and port, so approving
+   `https://example.com` silently authorised `http://example.com` (a plaintext
+   downgrade) and `http://example.com:8080/admin`. Keyed on full origin now.
+6. Streaming bubbles were orphaned by a repair round, a cancellation or an
+   engine error — left with a live blinking caret implying generation was still
+   running — and the *next* user message then retroactively deleted the partial
+   answer from the history. `settleStream()` finalises a bubble in place; an
+   interrupted reply is marked as such instead of being silently rewritten.
+7. The settings sheet rebuilt itself on any change, destroying half-typed input
+   (including a pasted API token), scroll position and focus. Drafts, scroll and
+   caret position now survive a re-render.
+8. Reloading the model mid-turn hid the Stop button and re-enabled the composer
+   while the turn was still running, leaving no way to cancel and running
+   `engine.load()` underneath an in-flight `generate()`. It now cancels first.
+9. Enter bypassed the disabled Send button, so a turn could be started during
+   the multi-minute first model download.
+10. A response header literally named `__proto__` was invisible in the log, the
+    export and the model's transcript — a free "hide one header from the audit
+    trail" primitive against a log that claims to hold the full story. Header
+    maps are now null-prototype. (No pollution was possible; the value was
+    simply dropped.)
+
+### Held up under attack
+
+The reviewer's executed sweep — hostile model prose, hostile final answers,
+hostile response bodies and hostile response headers, all carrying
+`<img onerror>`, `<script>` and `javascript:` payloads, viewed in both the chat
+and the log — produced zero injected nodes. The "no `innerHTML` in `src/ui/`"
+claim holds, `el()` is not attribute-injectable, and a `Location: javascript:…`
+header renders as inert text. Confirmation double-resolve and stale approval
+were both unreachable; number inputs cannot produce `NaN` or wedge a value.
+
+### Also changed
+
+The confirmation card now de-emphasises everything but the last three labels of
+a hostname. A deceptive prefix reads as trustworthy left-to-right, and
+left-to-right is how people read; pulling the eye to the tail is where the truth
+is. It is emphasis, not truncation — the full host is always rendered, and the
+split rule is a pure function so it is tested without a DOM.
+
+### Verification
+
+- 419 unit tests, 39 Playwright scenarios, coverage gate green
+  (97.6% statements, 91.4% branches).
+- Nine new e2e regressions cover the Enter bypass, the Approve arming delay,
+  proxy disclosure, sub-domain wrapping, the cancelled-card contradiction, caret
+  orphaning, history preservation, settings-draft survival and the pre-load
+  Enter guard.
+
+---
+
+## M4 adversarial review — test quality
+
+The most useful review of the four. A reviewer ran ~100 targeted mutations
+against `src/`, checking whether the suite that was passing would actually
+notice each one. Its verdict on the core was reassuring — all 18 mutations to
+`curl.js`'s security logic died, as did all 16 to `toolcall.js`, the
+`shouldConfirm` policy and the iteration cap — and the shuffle/isolation runs
+found no order-dependence. The weaknesses were all at the edges.
+
+### Tests that could not fail
+
+Four tests were structurally incapable of failing, and one asserted the
+opposite of its own name:
+
+1. **`sanitize` "fills every default"** compared the function's output against
+   the very constant it copies, so it passed for *any* value of `DEFAULTS`.
+   This single tautology is why seven default-value mutations survived —
+   including flipping **confirm-before-send to off**, the spec's headline
+   security default. Replaced with a literal, spelled-out expectation.
+2. **`clampIterations`** used the constants as its own expected values. Now
+   literal, with the spec's numbers pinned separately.
+3. **"does not leak an abort listener per confirmation"** watched for Node's
+   `MaxListeners` warning, which fires at 10 — with five confirmations it could
+   never trigger, leak or no leak. Now counts `addEventListener`/
+   `removeEventListener` on `AbortSignal` directly and asserts they balance.
+4. **"does not remember a host it cannot parse"** used a perfectly valid URL and
+   asserted the success path. Deleted: the branch it named is covered directly
+   by `originOf`, and there is no honest way to reach it through the loop.
+5. **"tolerates a confirm handler returning undefined"** asserted only that
+   nothing was sent — it stayed green when the loop threw a `TypeError` and
+   ended the turn as `tool_error`. Now asserts the turn completes normally and
+   the model is told it was denied.
+
+Two e2e tests were similarly hollow: the log-export test asserted only the
+*filename* — never that the file was JSON, never that anything was masked, and
+it configured no credential so there was nothing to mask; and the `file://`
+notice test never loaded a `file://` origin, asserting only that the notice
+stays hidden over HTTP. Both now do the thing their names claim.
+
+### Mutations that survived the entire apparatus
+
+Seven changes passed both the unit suite and all 30 e2e scenarios. Four were in
+`app.js` — the composition root, where every setting meets the tool, sitting at
+48% branch coverage behind `toolcall.js`'s 99%:
+
+- **The CORS proxy could be disconnected entirely** and everything stayed green.
+  `curl.js`'s proxy logic was well tested in isolation; that the *setting*
+  reached it was tested by nothing.
+- **The abort signal could be dropped**, so Stop could not cancel an in-flight
+  request. Every cancellation test cancelled at the confirmation card, never
+  mid-fetch.
+- The timeout, byte cap and credential list could all be disconnected the same way.
+
+`app.js` now has tests asserting each setting reaches `executeCurl` — verified
+against a spy `fetchImpl`, including one that hangs the request so cancellation
+is exercised where it actually matters.
+
+### Also closed
+
+- **Per-file coverage thresholds.** The 90% gate was global-only, which is what
+  let `app.js` hide. Now `perFile: true`; `app.js` is at 100% statements / 80%
+  branches.
+- **Error message text is asserted for all 11 `CurlError` classes**, not just
+  the `kind`. Five previously asserted only the code, so the prose SPEC §6.3
+  makes a first-class requirement could be replaced with `'x'` unnoticed. Doing
+  this surfaced that the `cancelled` message really was too terse to be useful;
+  it now says the request may or may not have reached the server.
+- **Prompt text has its own test file.** SPEC §10 calls it load-bearing, and it
+  was untested: the iteration budget, the allowlist disclosure and the
+  "do not emit reasoning" line could each be deleted silently.
+- **`POST` with a body and both redirect defences are now exercised in a real
+  browser.** The redirect rules rest on `response.url` being populated after a
+  followed 302 — an assumption about browser behaviour that unit tests could
+  only assert against a hand-rolled fake. The test server had a `/redirect`
+  route that no e2e test used.
+- The `readBodyCapped` "unknown size" contract, `log.requestBody`, the live
+  iteration counter, the post-request abort check, and settings being re-read
+  each pass all now have assertions.
+
+### Verification
+
+- **474 unit tests, 43 Playwright scenarios**, per-file coverage gate green
+  (97.9% statements, 92.4% branches overall).
+- Every mutation the reviewer proved survivable was re-run against the new
+  suite. All now fail the build.
+
+
+---
+
+## Final state
+
+All four milestones from SPEC §11 are built, reviewed and verified.
+
+| | |
+|---|---|
+| Unit tests | 474, per-file coverage gate green (97.9% statements, 92.4% branches) |
+| End-to-end | 43 Playwright scenarios, desktop 1280px and Pixel 7, against the built artifact |
+| Build | one self-contained `dist/index.html`, 6.1 MB (2.2 MB gzipped) |
+| CI | unit suite gates the build; the single-file property is asserted, not assumed |
+
+### What the reviews cost and bought
+
+Four adversarial rounds found **44 real defects** across security, correctness,
+spec compliance, UI and the test suite itself. Not one was caught by the tests
+passing at the time. The pattern is worth recording:
+
+- **The bugs clustered at the seams**, not inside modules. Credential scoping
+  was enforced on one code path and not its twin; the proxy setting was
+  well-tested and so was the proxy code, but not the wiring between them;
+  `curl.js` masked bodies and not headers. Every module was individually
+  defensible.
+- **The security decision point attracted the worst of them.** The confirmation
+  card auto-focused Approve so the reflex second Enter dispatched a `DELETE`;
+  it masked the `{{placeholder}}` the user needed to see while showing the
+  literal token it should have hidden; it named the target host while the data
+  went to a proxy; and a long sub-domain pushed the real domain off-screen.
+- **A test suite is not evidence until something has tried to break it.** 474
+  tests and a 90% gate coexisted with a tautology that made the spec's headline
+  security default unassertable, and with `app.js` — where every setting meets
+  the tool — at 48% branch coverage.
+
+### Not verified
+
+Two things are written, wired and unrun, because this machine has no GPU:
+
+- **`npm run test:e2e:real`** — the real-model suite against Qwen3-0.6B. It
+  skips with an explicit reason rather than passing vacuously, distinguishing
+  "no WebGPU adapter" from "cannot reach the model CDN".
+- **`node scripts/model-check.js`** — SPEC §11.1's tool-call reliability
+  comparison across the three tiers. The unsubstantiated "best tool-calling
+  reliability" claim has been removed from the tier table until someone runs it.
+
+Everything green above was run against the built single-file artifact, not the
+dev server.

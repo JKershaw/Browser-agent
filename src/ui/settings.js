@@ -79,7 +79,7 @@ export function createSettingsSheet(root, deps) {
 
       section('Security', [
         toggle('Confirm before sending', s.confirmBeforeSend, (v) => set({ confirmBeforeSend: v }),
-          'Every request shows an approve/deny card first. DELETE always asks, even with this off.'),
+          'Every request shows an approve/deny card first. Two things always ask even with this off: DELETE, and any request that would carry one of your stored credentials.'),
         allowlistEditor(s),
         credentialsEditor(s),
       ]),
@@ -140,7 +140,7 @@ export function createSettingsSheet(root, deps) {
       set({ allowlist: [...s.allowlist, v] });
     };
 
-    return field('Domain allowlist', el('div', { class: 'stack' }, [
+    return group('Domain allowlist', el('div', { class: 'stack' }, [
       s.allowlist.length === 0
         ? el('p', { class: 'muted', text: 'Empty — every domain is allowed.' })
         : el('ul', { class: 'chips' }, s.allowlist.map((h) =>
@@ -208,7 +208,7 @@ export function createSettingsSheet(root, deps) {
       name.value = ''; value.value = ''; header.value = ''; hosts.value = ''; sessionOnly.checked = false;
     };
 
-    return field('Credentials', el('div', { class: 'stack' }, [
+    return group('Credentials', el('div', { class: 'stack' }, [
       el('p', { class: 'warn-box', text: 'Stored credentials are kept in this browser’s localStorage in plain text. Anyone with access to this browser profile can read them. Use “session only” for anything sensitive — those are held in memory and disappear when you close the tab.' }),
       rows.length ? el('div', { class: 'stack' }, rows) : el('p', { class: 'muted', text: 'No credentials stored.' }),
       el('div', { class: 'stack cred-new' }, [
@@ -241,10 +241,34 @@ function section(title, children) {
   return el('section', { class: 'settings-section' }, [el('h3', { text: title }), ...children]);
 }
 
+/**
+ * A labelled single control.
+ *
+ * `<label>` is correct only when it wraps exactly one form control. Wrapping a
+ * composite group in one gives the group's *first* control an accessible name
+ * made of the entire label text — a "Reveal" button announced as three
+ * paragraphs of credential warning. Use `group()` for anything with more than
+ * one control in it.
+ */
 function field(label, control, hint) {
   return el('label', { class: 'field' }, [
     el('span', { class: 'field-label', text: label }),
     control,
+    hint ? el('span', { class: 'field-hint', text: hint }) : null,
+  ]);
+}
+
+/**
+ * A labelled cluster of several controls. Not a `<label>`; the caption is
+ * associated with the group via `aria-labelledby` instead.
+ */
+let groupSeq = 0;
+function group(label, content, hint) {
+  groupSeq += 1;
+  const id = `group-label-${groupSeq}`;
+  return el('div', { class: 'field', role: 'group', 'aria-labelledby': id }, [
+    el('span', { class: 'field-label', id, text: label }),
+    content,
     hint ? el('span', { class: 'field-hint', text: hint }) : null,
   ]);
 }

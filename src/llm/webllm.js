@@ -23,7 +23,7 @@ export const MODEL_TIERS = Object.freeze([
     label: 'Qwen3 4B (default)',
     approxDownload: '~2.5 GB',
     vramMb: 3431.59,
-    note: 'Best tool-calling reliability of the three. Desktop with a discrete or recent integrated GPU.',
+    note: 'The spec\u2019s default tier. Desktop with a discrete or recent integrated GPU. Run scripts/model-check.js on a GPU machine to compare tool-call reliability across tiers.',
   },
   {
     tier: 'small',

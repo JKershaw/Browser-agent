@@ -64,12 +64,15 @@ export function clampIterations(value) {
 /**
  * Decide whether a call needs a confirmation card.
  *
- * DELETE always confirms, even on a host the user auto-approved this session —
- * destructive and irreversible beats convenience.
+ * Two cases always confirm, whatever the settings say, because both are
+ * irreversible: DELETE, and any request that would carry a stored credential.
+ * A leaked long-lived token cannot be un-leaked, so it gets the same treatment
+ * as a destructive method rather than riding on a general "trust this host".
  *
  * @param {{args: {method: string, url: string}}} call
  * @param {{confirmBeforeSend?: boolean}} settings
  * @param {{autoApprovedHosts?: Set<string>}} [session]
+ * @param {{used?: string[]}} [credentialUse] Output of `describeCredentialUse`.
  * @returns {boolean}
  */
 export function shouldConfirm(call, settings, session = {}, credentialUse = null) {

@@ -188,3 +188,52 @@ vanilla JS with no framework.
 
 - **371 unit tests**, 12 Playwright scenarios green against the built artifact.
 - Screenshots checked at 1280×860 (light and dark) and 390×844 (mobile).
+
+---
+
+## M3 — Hardening
+
+Spec §11.3 items, most of which landed during the M1 review fix pass. What M3
+added on top:
+
+- **`scripts/model-check.js`** — the tool-call reliability comparison SPEC §11.1
+  asks for, as a runnable harness. It drives the built artifact in a real
+  browser across the three tiers and reports first-try calls, repairs, hard
+  failures and spurious calls. **It has not been run:** WebLLM is WebGPU-only
+  and this build machine has no GPU adapter, so the script exits with a clear
+  error rather than reporting zeros. The unverified "best tool-calling
+  reliability" claim has been removed from the tier table until someone runs it
+  on a GPU.
+- **`scripts/serve-dist.js`** — `npm run serve:dist` was advertised in
+  `package.json` and did not exist.
+- **The mock engine announces itself.** `?mockEngine=1` ships in the artifact so
+  the e2e suite can drive the real deliverable; it now posts a warning notice so
+  scripted replies can never be mistaken for the model.
+- **Coverage gate is honest and green.** `app.js` had no tests at all while the
+  gate claimed to cover it; 20 tests later the thresholds pass for real
+  (96.8% statements, 90.4% branches, exit code 0).
+- `readBodyCapped` reports `bytes: null` rather than a magic `-1` when a
+  truncated read genuinely does not know the size.
+
+### Bugs found by the M3 e2e suite
+
+1. **The app shell rendered behind the WebGPU capability gate.** `#app[hidden]`
+   stayed visible because `.app { display: flex }` outranks the UA's
+   `[hidden] { display: none }`. The gate is supposed to replace the app, and
+   instead it stacked with it — exactly the "never a blank page or a
+   console-only failure" case §2.2 calls out. Fixed with an explicit
+   `[hidden] { display: none !important }`.
+2. **Buttons inside composite settings groups had garbage accessible names.**
+   `field()` wrapped the whole credentials block in a `<label>`, so the first
+   control in it — the "Reveal" button — was announced as the entire section
+   including the plaintext-storage warning. Composite groups now use
+   `role="group"` with `aria-labelledby` instead of an implicit label.
+3. **Tap-outside-to-close was impossible on a phone.** The sheet was full-width,
+   putting the scrim entirely behind it, so the only exit was the Close button.
+   Sheets now stop 3rem short of the edge — the standard nav-drawer affordance.
+
+### Verification
+
+- 393 unit tests; coverage gate green.
+- 30 Playwright scenarios across two device profiles (desktop 1280px, Pixel 7),
+  all against the built single-file artifact.

@@ -52,6 +52,14 @@
 
 * { box-sizing: border-box; }
 
+/*
+ * The `hidden` attribute must win. The UA rule is only `[hidden] { display:
+ * none }`, so any author rule that sets `display` — `.app { display: flex }`,
+ * for one — silently defeats it and the "hidden" element keeps rendering.
+ * That bug put the whole app shell behind the WebGPU capability gate.
+ */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;
@@ -350,7 +358,13 @@ body { display: flex; flex-direction: column; }
 .sheet {
   position: fixed;
   inset: 0 0 0 auto;
-  width: min(30rem, 100%);
+  /*
+   * Deliberately not full-width on a phone: a sheet covering 100% leaves the
+   * scrim entirely behind it, so tap-outside-to-close becomes impossible and
+   * nothing signals that the chat is still there. The 3rem strip is the
+   * standard nav-drawer affordance and is comfortably tappable.
+   */
+  width: min(30rem, calc(100% - 3rem));
   background: var(--bg-raised);
   border-left: 1px solid var(--border);
   box-shadow: var(--shadow);

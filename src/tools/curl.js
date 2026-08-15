@@ -349,7 +349,7 @@ export async function readBodyCapped(response, maxBytes) {
     return {
       text: new TextDecoder().decode(encoded.slice(0, cap)),
       truncated: true,
-      bytes: encoded.length,
+      bytes: encoded.length,   // the fallback path did read it all, so this is known
     };
   }
 
@@ -387,7 +387,10 @@ export async function readBodyCapped(response, maxBytes) {
     merged.set(c, offset);
     offset += c.length;
   }
-  return { text: new TextDecoder().decode(merged), truncated, bytes: truncated ? -1 : total };
+  // `bytes` is the true size only when the whole body was read; a truncated
+  // read genuinely does not know it, and null says so rather than encoding
+  // "unknown" as a magic -1 that a caller might render or sum.
+  return { text: new TextDecoder().decode(merged), truncated, bytes: truncated ? null : total };
 }
 
 /**

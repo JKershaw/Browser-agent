@@ -31,6 +31,9 @@ export default defineConfig({
         ...devices['Desktop Chrome'],
         launchOptions: { executablePath },
       },
+      // The phone suite asserts phone-sized layout; running it at 1280px
+      // proves nothing and fails on the desktop side rail.
+      testIgnore: ['**/mobile.spec.js'],
     },
     {
       name: 'mobile-chromium',

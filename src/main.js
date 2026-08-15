@@ -191,6 +191,11 @@ async function loadModel(modelId) {
 async function boot() {
   const { caps, model } = await app.probe();
 
+  // Everything here already runs in the user's browser and is inspectable via
+  // devtools, so exposing the app object gives away nothing. It is what the
+  // Playwright suite and scripts/model-check.js drive.
+  globalThis.__agent = app;
+
   // The mock engine exists for tests and needs no GPU, so it skips the gate.
   if (!caps.webgpu && !wantsMockEngine()) {
     $('#app').hidden = true;
@@ -200,6 +205,13 @@ async function boot() {
 
   if (app.isFileOrigin()) {
     $('#file-notice').hidden = false;
+  }
+
+  if (wantsMockEngine()) {
+    chat.addNotice({
+      kind: 'warning',
+      text: 'Mock engine active (?mockEngine=1). Replies are scripted, not generated — this mode exists for the test suite. Remove the parameter to use the real model.',
+    });
   }
 
   for (const n of app.notices) chat.addNotice(n);

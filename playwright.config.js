@@ -6,14 +6,22 @@ import { defineConfig, devices } from '@playwright/test';
  *
  * Chromium comes from the image's pre-installed Playwright browsers when
  * `PLAYWRIGHT_CHROMIUM_PATH` is set; otherwise Playwright's own download is
- * used. The real-model spec is excluded by default (SPEC §9.2) because it needs
- * a working WebGPU device and several minutes of download.
+ * used.
  */
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined;
 
+/**
+ * The real-model spec (SPEC §9.2) needs a working WebGPU device and downloads
+ * ~0.4 GB, so it is opt-in via `npm run test:e2e:real`.
+ *
+ * This list is spread into every project rather than set at the top level: a
+ * project's own `testIgnore` *replaces* the global one, so a project that sets
+ * it would otherwise silently pick the real-model spec back up.
+ */
+const OPT_IN_ONLY = process.env.REAL_MODEL ? [] : ['**/real-model.spec.js'];
+
 export default defineConfig({
   testDir: './tests/e2e',
-  testIgnore: process.env.REAL_MODEL ? [] : ['**/real-model.spec.js'],
   timeout: 60_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
@@ -33,7 +41,7 @@ export default defineConfig({
       },
       // The phone suite asserts phone-sized layout; running it at 1280px
       // proves nothing and fails on the desktop side rail.
-      testIgnore: ['**/mobile.spec.js'],
+      testIgnore: ['**/mobile.spec.js', ...OPT_IN_ONLY],
     },
     {
       name: 'mobile-chromium',

@@ -53,6 +53,20 @@ export function createChatPane(root) {
     },
 
     /**
+     * Append an already-built element — the loading card, which owns its own
+     * lifecycle and updates in place rather than being re-rendered.
+     * @param {Node} node
+     */
+    addNode(node) {
+      return add(node);
+    },
+
+    /** Keep the newest content in view after something else resized the card. */
+    scrollToEnd() {
+      autoScroll();
+    },
+
+    /**
      * @param {string} text
      */
     addUserMessage(text) {

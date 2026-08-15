@@ -24,12 +24,20 @@ import { emptyStats } from './engine.js';
  * @param {number} [opts.deltaMs] Delay between streamed chunks.
  * @param {number} [opts.loadMs] Simulated load duration.
  * @param {boolean} [opts.failLoad] Make `load` reject.
+ * @param {Error} [opts.loadError] The error `failLoad` should throw. Lets a
+ *   scenario reproduce a specific browser failure verbatim.
+ * @param {number} [opts.failAt] Fraction of the download to get through before
+ *   failing, so the error arrives against a part-filled progress bar rather
+ *   than an empty one.
+ * @param {number} [opts.totalMb] Simulated download size.
  * @returns {import('./engine.js').Engine & {calls: Array<object>, setScript: Function}}
  */
 export function createMockEngine(opts = {}) {
   let script = opts.script ? [...opts.script] : ['Hello from the mock engine.'];
   const deltaMs = opts.deltaMs ?? 0;
   const loadMs = opts.loadMs ?? 0;
+  const failAt = opts.failAt ?? 0.65;
+  const totalMb = opts.totalMb ?? 1024;
   const calls = [];
   let modelId = null;
   let callIndex = 0;
@@ -56,12 +64,75 @@ export function createMockEngine(opts = {}) {
       };
     },
 
+    /** Nothing is cached, so the loading UI always takes its first-run path. */
+    async isCached() {
+      return false;
+    },
+
+    async deleteFromCache() {
+      return true;
+    },
+
+    /**
+     * Replay a load the way WebLLM reports one.
+     *
+     * The wording here is copied from WebLLM's own progress callback, including
+     * the detail that the fraction restarts at zero for each of the three
+     * passes. `progress.js` exists to absorb exactly that, so the mock has to
+     * reproduce it or the e2e suite would be testing a tidier world than the
+     * one users get.
+     */
     async load(id, onProgress) {
-      if (opts.failLoad) throw new Error('Mock engine was configured to fail loading.');
-      for (const p of [0, 0.5, 1]) {
-        onProgress?.({ progress: p, text: `mock load ${Math.round(p * 100)}%` });
-        await sleep(loadMs / 3);
+      const STEPS = 20;
+      const step = loadMs > 0 ? loadMs / STEPS : 0;
+      const shards = 38;
+      const emit = (text, progress) => onProgress?.({ progress, text });
+
+      emit('Start to fetch params', 0);
+      await sleep(step);
+
+      // Download.
+      for (let i = 1; i <= 12; i += 1) {
+        const fraction = i / 12;
+        if (opts.failLoad && fraction >= failAt) {
+          throw opts.loadError || new Error('Mock engine was configured to fail loading.');
+        }
+        const shard = Math.round(fraction * shards);
+        const mb = Math.ceil(fraction * totalMb);
+        emit(
+          `Fetching param cache[${shard}/${shards}]: ${mb}MB fetched. ${Math.floor(fraction * 100)}% completed, ` +
+            `${Math.round((i * step) / 1000)} secs elapsed. It can take a while when we first visit this page to populate the cache.` +
+            ' Later refreshes will become faster.',
+          fraction
+        );
+        await sleep(step);
       }
+      if (opts.failLoad) throw opts.loadError || new Error('Mock engine was configured to fail loading.');
+
+      // Read back onto the GPU.
+      for (let i = 1; i <= 4; i += 1) {
+        const fraction = i / 4;
+        const shard = Math.round(fraction * shards);
+        emit(
+          `Loading model from cache[${shard}/${shards}]: ${Math.ceil(fraction * totalMb)}MB loaded. ` +
+            `${Math.floor(fraction * 100)}% completed, ${Math.round((12 + i) * step / 1000)} secs elapsed.`,
+          fraction
+        );
+        await sleep(step);
+      }
+
+      // Shaders.
+      for (let i = 1; i <= 3; i += 1) {
+        const fraction = i / 3;
+        emit(
+          `Loading GPU shader modules[${i}/3]: ${Math.floor(fraction * 100)}% completed, ` +
+            `${Math.round((16 + i) * step / 1000)} secs elapsed.`,
+          fraction
+        );
+        await sleep(step);
+      }
+
+      emit('Finish loading on WebGPU - mock', 1);
       modelId = id;
     },
 

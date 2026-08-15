@@ -113,3 +113,50 @@ test('a small-memory phone is offered the small model with a reason', async ({ p
   await page.locator('#toggle-settings').click();
   await expect(page.locator('select')).toHaveValue(/1\.7B|0\.6B/);
 });
+
+test('the loading card fits a phone and stays on screen', async ({ page, appServer }) => {
+  // This whole feature exists because of a failure on a phone, so the phone
+  // layout of the thing that reports it is not an afterthought.
+  const qs = new URLSearchParams({ mockEngine: '1', mockScript: '["ok"]', mockLoadMs: '8000' });
+  await page.goto(`${appServer.url}/?${qs}`);
+
+  const card = page.locator('.loading-card');
+  await expect(card).toBeVisible();
+
+  const viewport = page.viewportSize();
+  const box = await card.boundingBox();
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
+
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+  );
+  expect(overflow).toBeLessThanOrEqual(1);
+});
+
+test('the failure report is readable and actionable on a phone', async ({ page, appServer }) => {
+  const qs = new URLSearchParams({
+    mockEngine: '1', mockScript: '["ok"]', mockLoadMs: '1200', mockLoadFail: 'cache',
+  });
+  await page.goto(`${appServer.url}/?${qs}`);
+
+  const card = page.locator('.loading-card-failed');
+  await expect(card).toBeVisible({ timeout: 20_000 });
+
+  const viewport = page.viewportSize();
+  const box = await card.boundingBox();
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
+
+  // Every action stays tappable rather than being squeezed into a row of slivers.
+  for (const button of await card.getByRole('button').all()) {
+    const b = await button.boundingBox();
+    expect(b.height).toBeGreaterThanOrEqual(MIN_TOUCH_PX - 8);
+  }
+
+  // The debug block wraps instead of pushing the page sideways.
+  await card.locator('.loading-details > summary').click();
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+  );
+  expect(overflow).toBeLessThanOrEqual(1);
+});

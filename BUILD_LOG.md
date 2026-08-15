@@ -459,3 +459,92 @@ Two things are written, wired and unrun, because this machine has no GPU:
 
 Everything green above was run against the built single-file artifact, not the
 dev server.
+
+---
+
+## Post-release: the first real failure on a real phone
+
+The deployed app was tried on an Android phone that was nearly full. It reached
+about 65% and then showed:
+
+> The model could not be loaded: Failed to execute 'add' on 'Cache': Entry was
+> not found.. Check the model id in settings, your connection, and that this
+> device has enough memory.
+
+Two separate failures of the app, neither of them in the code that broke.
+
+**The message named none of the three things it listed.** "Entry was not found"
+is Chromium's wording for a cache entry that disappeared while it was being
+written into — which happens when the device runs out of room and the browser
+evicts what it has just stored. The app had `navigator.storage.estimate()`
+available the whole time and never asked it. It could have said "this site has
+307 MB left and this model needs about 1 GB"; instead it offered three
+possibilities and committed to none, which is barely better than silence. The
+doubled full stop, from interpolating a message that already ended in one, was
+the least of it.
+
+**Sixty-five per cent of what?** WebLLM's progress fraction runs 0 → 1 three
+times — downloading, uploading to the GPU, compiling shaders — and the app was
+rendering it straight into a corner of the stats bar. So the number was
+ambiguous, the bar it was not attached to would have snapped back to empty
+twice, and there was no rate, no total and no estimate. On a phone, on mobile
+data, with several minutes to wait, that is the entire user experience.
+
+### What changed
+
+`llm/progress.js` parses WebLLM's progress sentences, maps the three passes onto
+one monotonic bar with adaptive weighting, and derives the total, the rate and
+the estimate from the byte counts. `ui/loading.js` renders that as a card with
+the phase in words, bytes against total, MB/s, time left and time so far,
+ticking on a 250 ms timer between the engine's per-shard reports.
+
+`llm/storage.js` measures the quota, requests persistent storage, and checks
+headroom *before* the download rather than after it fails. `llm/load-error.js`
+classifies the failure and quotes the measurement back. The failure card offers
+retry (which resumes), a smaller model (only ones actually smaller), clearing
+the dead partial download, and a copyable debug report.
+
+### What the reviews found
+
+Five defects, three of them mine from this change, none caught by the tests that
+were passing at the time:
+
+- **The bar was full before anything downloaded.** `baseFor(PHASE.INIT)` fell
+  through its loop and returned the sum of every weight — 1.0. "Start to fetch
+  params", the first thing WebLLM says, therefore filled the bar, and the entire
+  download then ran behind a bar reading 100%. Sixteen unit tests covered the
+  tracker and every one of them started from a phase that was not `init`. The
+  e2e suite caught it on its first run, which is the argument for having one.
+- **The advice suggested the model that had just failed.** With Qwen3 1.7B
+  failing, the card said "choose a smaller model — Qwen3 1.7B needs about 1 GB".
+  The advice was a hardcoded sentence rather than a function of the situation.
+- **The decisive sentence was last.** The explanation opened with two sentences
+  about Chromium's cache internals and closed with the storage figures. On a
+  phone that puts the only sentence that answers "why did this happen" below
+  where anyone reads to. It now leads when it is decisive, and stays second when
+  the measurement exonerates storage.
+- **Switching model mid-download interleaved two loads into one card.** The
+  composer is disabled while loading; the settings sheet is not. The first
+  load's callbacks kept firing into the card the second had built. Fixed with a
+  sequence guard.
+- **A stalled estimate lied indefinitely.** The countdown floored at zero, so a
+  download that stopped showed "a few seconds left" for as long as you cared to
+  watch. It is now withdrawn on overrun, and a silence over twenty seconds is
+  reported as a silence.
+
+The pattern from the earlier rounds held: the bugs were at the seams — between
+the tracker and the phase it started in, between the advice and the model it was
+advising about, between two loads that were never meant to overlap.
+
+### Verified
+
+- 604 unit tests; per-file coverage gate met.
+- 58 Playwright scenarios against the built artifact, including twelve for the
+  loading card and the failure report, and two on a Pixel 7 profile.
+- The reported error is reproduced verbatim — name, message and all — through
+  `?mockLoadFail=cache`, so the diagnosis is tested against the real string
+  rather than a paraphrase of it.
+
+Still unverified, unchanged from before: nothing here has been exercised against
+a real GPU. The failure path was reproduced from the error text, not from a
+device that ran out of space.

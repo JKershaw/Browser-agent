@@ -350,6 +350,70 @@ body { display: flex; flex-direction: column; }
 .btn-approve { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 .btn-deny { color: var(--error); border-color: var(--error); }
 
+/* ---------- loading card ---------- */
+
+.loading-card {
+  align-self: stretch;
+  max-width: 46rem;
+  padding: .8rem .9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow);
+}
+
+.loading-head { display: flex; align-items: baseline; gap: .5rem; }
+.loading-head .spacer { flex: 1; }
+.loading-phase { font-size: .95rem; }
+.loading-percent { font-family: var(--mono); font-size: .9rem; color: var(--accent); font-weight: 600; }
+
+.loading-bar {
+  margin: .55rem 0 .5rem;
+  height: .5rem;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.loading-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: inherit;
+  /*
+   * The bar advances in jumps — one per shard — so the transition is doing the
+   * work of making a stepwise number look like a continuous process. Linear,
+   * because an eased fill that keeps stalling just before each step reads as
+   * stuttering rather than smooth.
+   */
+  transition: width .35s linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-fill { transition: none; }
+}
+
+.loading-facts, .loading-timing {
+  font-size: .8rem;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  min-height: 1.15em;
+}
+.loading-model { font-size: .72rem; color: var(--fg-muted); font-family: var(--mono); margin: .4rem 0 0; overflow-wrap: anywhere; }
+.loading-note { font-size: .8rem; margin: .5rem 0 0; }
+.loading-note-warn { color: var(--bad); }
+
+.loading-card-failed { border-color: var(--error); background: var(--error-bg); }
+.loading-fail-title { font-size: 1rem; margin: 0 0 .4rem; color: var(--error); }
+.loading-fail-explain { margin: 0 0 .5rem; font-size: .88rem; }
+.loading-advice { margin: 0 0 .6rem; padding-left: 1.1rem; font-size: .84rem; }
+.loading-advice li { margin: .25rem 0; }
+.loading-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .4rem; }
+.loading-details { font-size: .82rem; }
+.loading-details > summary { cursor: pointer; padding: .2rem 0; }
+.loading-debug { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .7rem; }
+
 /* ---------- notices ---------- */
 
 .notice {

@@ -16,12 +16,16 @@ import { emptyStats } from './engine.js';
  * `vramMb` values come from WebLLM's own `prebuiltAppConfig`, so the capability
  * gate compares like with like.
  */
+/** One gibibyte, so the download figures below read as they are written. */
+const GIB = 1024 * 1024 * 1024;
+
 export const MODEL_TIERS = Object.freeze([
   {
     tier: 'default',
     id: 'Qwen3-4B-q4f16_1-MLC',
     label: 'Qwen3 4B (default)',
     approxDownload: '~2.5 GB',
+    downloadBytes: 2.5 * GIB,
     vramMb: 3431.59,
     note: 'The spec\u2019s default tier. Desktop with a discrete or recent integrated GPU. Run scripts/model-check.js on a GPU machine to compare tool-call reliability across tiers.',
   },
@@ -30,6 +34,7 @@ export const MODEL_TIERS = Object.freeze([
     id: 'Qwen3-1.7B-q4f16_1-MLC',
     label: 'Qwen3 1.7B (small)',
     approxDownload: '~1 GB',
+    downloadBytes: 1 * GIB,
     vramMb: 2036.66,
     note: 'Auto-selected on memory-constrained devices, including most phones.',
   },
@@ -38,6 +43,7 @@ export const MODEL_TIERS = Object.freeze([
     id: 'Qwen3-0.6B-q4f16_1-MLC',
     label: 'Qwen3 0.6B (tiny, fastest)',
     approxDownload: '~0.4 GB',
+    downloadBytes: 0.4 * GIB,
     vramMb: 1403.34,
     note: 'Used by the e2e suite. Fast, but needs simple prompts to call the tool reliably.',
   },
@@ -49,9 +55,46 @@ export const MODEL_TIERS = Object.freeze([
  * but not default: the tier table in the spec was validated against Qwen3.
  */
 export const EXTRA_MODELS = Object.freeze([
-  { id: 'Qwen3.5-2B-q4f16_1-MLC', label: 'Qwen3.5 2B (newer line)', approxDownload: '~1.3 GB', vramMb: 2245.44 },
-  { id: 'Qwen3.5-4B-q4f16_1-MLC', label: 'Qwen3.5 4B (newer line)', approxDownload: '~2.4 GB', vramMb: 3867.82 },
+  { id: 'Qwen3.5-2B-q4f16_1-MLC', label: 'Qwen3.5 2B (newer line)', approxDownload: '~1.3 GB', downloadBytes: 1.3 * GIB, vramMb: 2245.44 },
+  { id: 'Qwen3.5-4B-q4f16_1-MLC', label: 'Qwen3.5 4B (newer line)', approxDownload: '~2.4 GB', downloadBytes: 2.4 * GIB, vramMb: 3867.82 },
 ]);
+
+/**
+ * Roughly how many bytes loading `id` will pull down.
+ *
+ * `null` for an id typed into the advanced field, where the size is genuinely
+ * unknown — the storage check treats that as "cannot say" rather than guessing,
+ * because a wrong guess here either blocks a load that would have worked or
+ * waves through one that cannot.
+ *
+ * @param {string} id
+ * @returns {number|null}
+ */
+export function downloadBytesFor(id) {
+  const found = [...MODEL_TIERS, ...EXTRA_MODELS].find((m) => m.id === id);
+  return found?.downloadBytes ?? null;
+}
+
+/**
+ * The tiers that are genuinely smaller than `id`, largest first.
+ *
+ * Used by the failure advice, which otherwise cheerfully suggests switching to
+ * the model that has just failed to load. An unknown id yields every tier — the
+ * advanced field can hold anything, and offering the known-small options is
+ * more useful than offering none.
+ *
+ * @param {string} id
+ * @returns {Array<{id: string, label: string, approxDownload: string}>}
+ */
+export function smallerModelsThan(id) {
+  const current = downloadBytesFor(id);
+  const smaller = current === null
+    ? [...MODEL_TIERS]
+    : MODEL_TIERS.filter((m) => m.downloadBytes < current);
+  return smaller
+    .sort((a, b) => b.downloadBytes - a.downloadBytes)
+    .map(({ id: modelId, label, approxDownload }) => ({ id: modelId, label, approxDownload }));
+}
 
 /**
  * Choose a default model for this device.
@@ -152,6 +195,28 @@ export function createWebLLMEngine(opts = {}) {
       }
     },
 
+    /**
+     * Delete a model's cached weights, wasm and config.
+     *
+     * The one thing the app can do about a device that has run out of room:
+     * a half-downloaded 2.5 GB model is dead weight, and the person who has
+     * just been told they are out of space should not have to go hunting
+     * through browser settings to reclaim it.
+     *
+     * @param {string} id
+     * @returns {Promise<boolean>} Whether the deletion ran.
+     */
+    async deleteFromCache(id) {
+      try {
+        const m = await mod();
+        if (typeof m.deleteModelAllInfoInCache !== 'function') return false;
+        await m.deleteModelAllInfoInCache(id);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
     async load(id, onProgress) {
       const m = await mod();
       if (engine) {
@@ -163,6 +228,10 @@ export function createWebLLMEngine(opts = {}) {
           onProgress?.({
             progress: typeof report.progress === 'number' ? report.progress : 0,
             text: report.text || '',
+            // WebLLM's own elapsed clock. Not used for the estimate — that is
+            // measured here, where it cannot be reset by a phase change — but
+            // worth passing on rather than discarding.
+            timeElapsed: typeof report.timeElapsed === 'number' ? report.timeElapsed : null,
           });
         },
       });

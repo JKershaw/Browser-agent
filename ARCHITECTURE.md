@@ -29,6 +29,10 @@ src/
     engine.js       The engine contract + WebGPU/memory capability detection.
     webllm.js       WebLLM implementation, model tiers, default-model choice.
     mock.js         Scripted engine for tests and GPU-less e2e.
+    progress.js     Parses WebLLM's progress text; one monotonic bar, rate, ETA.
+    storage.js      navigator.storage estimate, persistence, headroom check.
+    load-error.js   Classifies a failed load and builds the debug report.
+    format.js       Sizes, rates and durations for humans. Pure.
   state/
     settings.js     localStorage-backed settings, session-only credentials.
     log.js          In-memory request log, masked, JSON-exportable.
@@ -39,6 +43,7 @@ src/
     logview.js      Request log view.
     stats.js        Stats bar.
     gate.js         WebGPU capability screen.
+    loading.js      Loading card, and the failure report it becomes.
     styles.css      One stylesheet, mobile-first.
   app.js            Composition root. No DOM.
   main.js           DOM wiring. No decisions.
@@ -228,6 +233,65 @@ suggested fix (a proxy) only works if the proxy is itself HTTPS. Localhost and
 other potentially-trustworthy origins are exempt, exactly as browsers exempt
 them, so pointing the agent at a local dev server still works from the hosted
 site.
+
+## Loading a model, and failing to
+
+WebLLM reports load progress as a fraction plus a sentence, and the fraction
+runs 0 → 1 **three times**: once downloading the weights, once reading them back
+onto the GPU, once compiling shaders. `progress.js` parses the sentence to find
+out which pass is running, weights the three onto one monotonic bar, and pulls
+the byte counts out so the rate and the estimate are measured rather than
+guessed. The weighting adapts: a cached model has no download pass at all, and
+`isCached()` is only a hint — a partly populated cache fetches the rest — so the
+tracker reweights from what actually happens.
+
+The estimate is deliberately conservative. It is withheld for the first few
+seconds, quoted only to a granularity it can defend ("about 2 minutes left"),
+counted down between reports so it does not look frozen, and **withdrawn**
+rather than floored at zero once the load overruns it. A silence longer than
+20 s is reported as a silence, because a card that says nothing for half a
+minute is otherwise indistinguishable from a hung one.
+
+### Load error taxonomy
+
+The failure that prompted this was `Failed to execute 'add' on 'Cache': Entry
+was not found.` — Chromium's wording for a cache entry that vanished mid-write,
+which says nothing about storage even though storage is nearly always the cause.
+So the app measures instead of guessing: `navigator.storage.estimate()` supplies
+the free quota, and the diagnosis quotes it.
+
+| Kind | Recognised by | What the user is told |
+|---|---|---|
+| `storage-full` | `QuotaExceededError`, "quota exceeded" | The browser refused more data, with the measured numbers. |
+| `cache-write` | "Entry was not found", `on 'Cache'` | The download worked and storing it did not; leads with the measurement when the measurement settles it. |
+| `network` | "Failed to fetch", "Network response was not ok", `ERR_*` | The connection dropped; the retry resumes. |
+| `gpu-memory` | "out of memory", "exceeds the max buffer size" | It downloaded but will not fit; switch model. |
+| `device-lost` | `DeviceLostError` | The GPU was taken away; reload in the foreground. |
+| `model-unknown` | `ModelNotFoundError` and friends | The id is not in WebLLM's catalogue. |
+| `webgpu-missing` | `WebGPUNotAvailableError` | WebGPU went away mid-session. |
+| `aborted` | `AbortError` | It was cancelled. |
+| `unknown` | anything else | Verbatim, with everything measured at the time. |
+
+Order matters in that table. WebLLM's IndexedDB backend wraps fetch failures in
+a *"Failed to store …"* message, so a message mentioning storage can be a
+network failure; the network patterns are tested first, and reading it the other
+way would send someone deleting files to fix their wifi.
+
+Two properties the diagnosis is written to keep:
+
+- **It never advises what it cannot deliver.** The smaller-model advice names
+  only tiers actually smaller than the one that failed, and the button is
+  withheld when there are none — suggesting a switch to the model that has just
+  failed discredits everything around it.
+- **The same error gets different conclusions from different evidence.** A
+  `cache-write` on a device with 300 MB free is a storage problem; the identical
+  error with 59 GB free is a damaged cache, and is described as one.
+
+Everything measured goes into a copyable report — model, phase and byte position
+at the moment of failure, storage, device limits, browser, and a bounded stack.
+The page URL is included as origin and path only: the report is written to be
+pasted into a public tracker, and the app cannot vouch for what is in a query
+string.
 
 ## Threat model
 

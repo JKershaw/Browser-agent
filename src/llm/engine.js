@@ -29,6 +29,9 @@
  * @typedef {object} GenerateOptions
  * @property {number} [temperature]
  * @property {number} [maxTokens]
+ * @property {boolean} [thinking] Enable the model's reasoning mode, where it
+ *   has one. Defaults to false: reasoning tokens multiply the latency of every
+ *   tool round-trip (SPEC §4.2).
  * @property {AbortSignal} [signal]
  * @property {(delta: string) => void} [onDelta] Called per streamed chunk.
  */

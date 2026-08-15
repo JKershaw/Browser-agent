@@ -22,6 +22,7 @@ export const CurlError = Object.freeze({
   BLOCKED_SCHEME: 'blocked_scheme',
   BLOCKED_DOMAIN: 'blocked_domain',
   BLOCKED_REDIRECT: 'blocked_redirect',
+  CREDENTIAL_REDIRECT: 'credential_redirect',
   BAD_METHOD: 'bad_method',
   BAD_PROXY: 'bad_proxy',
   TIMEOUT: 'timeout',
@@ -79,16 +80,25 @@ export function isHostAllowed(host, allowlist) {
  * the placeholder, this function writes the value, and nothing ever puts the
  * value back into a message.
  *
+ * A credential that declares `hosts` is **only** substituted for a matching
+ * host. Without that check the `hosts` field would scope the auto-attach path
+ * while the placeholder path silently ignored it, so a prompt-injected model
+ * could name any stored credential and post it anywhere.
+ *
  * @param {Object<string,string>} headers
- * @param {Array<{name: string, value: string}>} credentials
- * @returns {{headers: Object<string,string>, used: string[], missing: string[], secrets: string[]}}
+ * @param {Array<{name: string, value: string, hosts?: string[]}>} credentials
+ * @param {string} [host] Target hostname, lower-case. Omit only where no
+ *   request is being built (previews); omitting it enforces nothing.
+ * @returns {{headers: Object<string,string>, used: string[], missing: string[],
+ *            blocked: string[], secrets: string[]}}
  */
-export function applyCredentials(headers, credentials = []) {
+export function applyCredentials(headers, credentials = [], host = null) {
   const byName = new Map(credentials.map((c) => [String(c.name).trim().toLowerCase(), c]));
   /** @type {Object<string,string>} */
   const out = {};
   const used = [];
   const missing = [];
+  const blocked = [];
   const secrets = [];
 
   for (const [k, v] of Object.entries(headers || {})) {
@@ -98,12 +108,44 @@ export function applyCredentials(headers, credentials = []) {
         if (!missing.includes(rawName)) missing.push(rawName);
         return whole;
       }
+      if (host !== null && cred.hosts?.length && !cred.hosts.some((p) => hostMatches(host, p))) {
+        if (!blocked.includes(cred.name)) blocked.push(cred.name);
+        return '';
+      }
       if (!used.includes(cred.name)) used.push(cred.name);
       if (cred.value) secrets.push(cred.value);
       return cred.value ?? '';
     });
   }
-  return { headers: out, used, missing, secrets };
+  return { headers: out, used, missing, blocked, secrets };
+}
+
+/**
+ * Which credentials would this call actually use, and why?
+ *
+ * Computed *before* the confirmation card is shown, so approving a request is
+ * an informed decision: auto-attached credentials are otherwise invisible until
+ * after the user has already said yes.
+ *
+ * @param {{url: string, headers?: Object<string,string>}} args
+ * @param {Array<object>} credentials
+ * @returns {{used: string[], blocked: string[], missing: string[], host: string}}
+ */
+export function describeCredentialUse(args, credentials = []) {
+  let host = '';
+  try {
+    host = new URL(args.url).hostname.toLowerCase();
+  } catch {
+    return { used: [], blocked: [], missing: [], host: '' };
+  }
+  const attached = attachHostCredentials(args.headers || {}, host, credentials);
+  const substituted = applyCredentials(attached.headers, credentials, host);
+  return {
+    host,
+    used: [...new Set([...attached.used, ...substituted.used])],
+    blocked: substituted.blocked,
+    missing: substituted.missing,
+  };
 }
 
 /**
@@ -142,9 +184,42 @@ export function attachHostCredentials(headers, host, credentials = []) {
  */
 export function maskSecrets(text, secrets = []) {
   let out = String(text);
-  const sorted = [...new Set(secrets.filter((s) => typeof s === 'string' && s.length >= 4))]
+  const sorted = [...new Set(secrets.filter((s) => typeof s === 'string' && s.length >= MIN_MASKABLE))]
     .sort((a, b) => b.length - a.length);
   for (const s of sorted) out = out.split(s).join(MASK);
+  return out;
+}
+
+/**
+ * Shortest secret worth masking. Below this, masking would replace ordinary
+ * substrings of unrelated text and make output unreadable, so very short
+ * secrets are documented as unmaskable rather than half-handled.
+ */
+export const MIN_MASKABLE = 3;
+
+/**
+ * Remove a trailing *partial* occurrence of a secret.
+ *
+ * Truncation happens at a byte boundary, so a secret straddling the limit
+ * leaves an unmasked prefix that `maskSecrets` cannot match. Anything ending in
+ * a prefix of a known secret is cut.
+ *
+ * @param {string} text
+ * @param {string[]} secrets
+ * @returns {string}
+ */
+export function stripPartialSecretTail(text, secrets = []) {
+  let out = String(text);
+  for (const s of secrets) {
+    if (typeof s !== 'string' || s.length < MIN_MASKABLE) continue;
+    // Longest prefix first: cut as much as possible.
+    for (let len = Math.min(s.length - 1, out.length); len >= MIN_MASKABLE; len -= 1) {
+      if (out.endsWith(s.slice(0, len))) {
+        out = `${out.slice(0, out.length - len)}${MASK}`;
+        break;
+      }
+    }
+  }
   return out;
 }
 
@@ -177,6 +252,41 @@ export function maskHeaders(headers, secrets = []) {
 }
 
 /**
+ * Header rendering for the **confirmation card**, which sees the model's
+ * headers *before* substitution.
+ *
+ * The difference from `maskHeaders` matters: there, a value is a real secret
+ * and must be hidden. Here a value is usually a `{{placeholder}}`, which is not
+ * a secret — hiding it would destroy exactly the information the user needs to
+ * judge the request, and would do so for `Authorization` specifically, the
+ * header an exfiltration attempt would use.
+ *
+ * So: placeholders are shown verbatim; literal values of sensitive headers are
+ * masked; known secret values are masked wherever they appear.
+ *
+ * @param {Object<string,string>} headers Pre-substitution headers.
+ * @param {string[]} secrets
+ * @returns {Object<string,string>}
+ */
+export function previewHeaders(headers, secrets = []) {
+  /** @type {Object<string,string>} */
+  const out = {};
+  for (const [k, v] of Object.entries(headers || {})) {
+    const value = String(v);
+    const hasPlaceholder = CREDENTIAL_RE.test(value);
+    CREDENTIAL_RE.lastIndex = 0; // the regex is global; reset before reuse
+    if (hasPlaceholder) {
+      out[k] = maskSecrets(value, secrets);
+    } else if (SENSITIVE_HEADERS.has(k.toLowerCase())) {
+      out[k] = MASK;
+    } else {
+      out[k] = maskSecrets(value, secrets);
+    }
+  }
+  return out;
+}
+
+/**
  * Rewrite a target URL through the configured CORS proxy.
  *
  * `{url}` in the template is replaced with the percent-encoded target. A
@@ -192,6 +302,29 @@ export function applyProxy(url, template) {
   if (t === '') return url;
   if (t.includes('{url}')) return t.split('{url}').join(encodeURIComponent(url));
   return t + url;
+}
+
+/**
+ * Reduce a proxy template to something safe to show.
+ *
+ * A template such as `https://proxy.example/?apikey=SECRET&url={url}` carries
+ * the user's own proxy key, which is not a registered credential and so is in
+ * no `secrets` list. Only origin and path survive.
+ *
+ * @param {string} template
+ * @returns {string}
+ */
+export function redactTemplate(template) {
+  const t = String(template || '').trim();
+  if (t === '') return '(none)';
+  try {
+    const u = new URL(t.replace('{url}', 'URL'));
+    return `${u.origin}${u.pathname}${u.search ? '?…' : ''}`;
+  } catch {
+    // Not parseable — which is usually why we are here. Show only the scheme
+    // and host-ish prefix, never the query string.
+    return `${t.split(/[?#]/)[0].slice(0, 60)}${/[?#]/.test(t) ? '?…' : ''}`;
+  }
 }
 
 /**
@@ -289,10 +422,12 @@ function explain(kind, ctx) {
       return `The host "${ctx.host}" is not on the domain allowlist (${ctx.allowlist.join(', ')}). Add it in settings to allow this request.`;
     case CurlError.BLOCKED_REDIRECT:
       return `The request was redirected to "${ctx.host}", which is not on the domain allowlist. The response was discarded.`;
+    case CurlError.CREDENTIAL_REDIRECT:
+      return `This request carried a stored credential to "${ctx.host}", but the server redirected it to "${ctx.finalHost}" — a different host, which the credential was not approved for. The response was discarded. Treat the credential as potentially exposed to ${ctx.finalHost} and rotate it if the target is not one you trust.`;
     case CurlError.BAD_METHOD:
       return `Method "${ctx.method}" is not supported. Use one of: ${ALLOWED_METHODS.join(', ')}.`;
     case CurlError.BAD_PROXY:
-      return `The configured CORS proxy template produced an invalid URL ("${ctx.proxied}"). Check the proxy setting.`;
+      return `The configured CORS proxy template (${ctx.template}) produced an invalid URL. Check the proxy setting — it must be an absolute http(s) URL, e.g. https://your-proxy.example/?url={url}.`;
     case CurlError.READ_FAILED:
       return `The response started but the body could not be read: ${ctx.detail}`;
     default:
@@ -374,34 +509,50 @@ export async function executeCurl(args, opts = {}) {
     });
   }
 
-  // Credentials: host-attached first, then explicit {{placeholders}}.
+  // Credentials: host-attached first, then explicit {{placeholders}}. Both
+  // paths enforce each credential's `hosts` scope.
   const attached = attachHostCredentials(args?.headers || {}, host, credentials);
-  const substituted = applyCredentials(attached.headers, credentials);
+  const substituted = applyCredentials(attached.headers, credentials, host);
   const secrets = [...attached.secrets, ...substituted.secrets];
   const outgoingHeaders = substituted.headers;
 
   const requestUrl = applyProxy(target.href, proxyTemplate);
+  const proxied = requestUrl !== target.href;
   try {
     // eslint-disable-next-line no-new
     new URL(requestUrl);
   } catch {
-    return failure(CurlError.BAD_PROXY, { proxied: requestUrl }, elapsed(), {
+    // Only the template's shape is reported, never its expansion: proxy
+    // templates routinely carry the user's own proxy API key, and this message
+    // reaches the model's context and the log export.
+    return failure(CurlError.BAD_PROXY, { template: redactTemplate(proxyTemplate) }, elapsed(), {
       request: { method, url: target.href },
     });
   }
 
-  /** Metadata attached to every outcome so the log always has the full story. */
+  /**
+   * Metadata attached to every outcome so the log always has the full story.
+   * `secrets` is non-enumerable: it must be reachable by the maskers but must
+   * never appear in `JSON.stringify` of a result, a hook payload or a
+   * transcript entry.
+   */
   const request = {
     method,
     url: target.href,
-    requestUrl,
-    headers: outgoingHeaders,
-    body: args?.body ?? null,
-    proxied: requestUrl !== target.href,
+    requestUrl: proxied ? redactTemplate(proxyTemplate) : target.href,
+    // Already masked. The substituted plaintext exists only in the `fetch`
+    // init and in the non-enumerable fields below, so serialising a result —
+    // a hook payload, a transcript entry, a log export — cannot leak a secret
+    // even if the consumer does no masking of its own.
+    headers: maskHeaders(outgoingHeaders, secrets),
+    body: maskSecrets(args?.body ?? '', secrets) || null,
+    proxied,
     credentialsUsed: [...new Set([...attached.used, ...substituted.used])],
     credentialsMissing: substituted.missing,
-    secrets,
+    credentialsBlocked: substituted.blocked,
   };
+  Object.defineProperty(request, 'secrets', { value: secrets, enumerable: false });
+  Object.defineProperty(request, 'rawHeaders', { value: outgoingHeaders, enumerable: false });
 
   const controller = new AbortController();
   let timedOut = false;
@@ -444,12 +595,25 @@ export async function executeCurl(args, opts = {}) {
       );
     }
 
-    // Redirects can walk out of the allowlist; the browser follows them before
-    // we get a say, so we discard the result rather than hand it over.
-    if (list.length > 0 && response.url) {
+    // Redirects can walk somewhere the user never approved. The browser follows
+    // them before we get a say, so the check is after the fact and the remedy
+    // is to discard the response rather than hand it over.
+    //
+    // Two rules, and the first applies even with no allowlist configured
+    // (the default), because a cross-origin redirect only strips
+    // Authorization/Cookie — an author-set `X-Api-Key` is forwarded to the
+    // redirect target:
+    //   1. credentials were sent and the final host is not the approved host;
+    //   2. an allowlist is configured and the final host is not on it.
+    // Skipped when proxied: `response.url` is then the proxy's URL, which is
+    // never the target and would otherwise fail every proxied request.
+    if (!proxied && response.url) {
       try {
         const finalHost = new URL(response.url).hostname.toLowerCase();
-        if (!isHostAllowed(finalHost, list)) {
+        if (finalHost !== host && secrets.length > 0) {
+          return failure(CurlError.CREDENTIAL_REDIRECT, { host, finalHost }, elapsed(), { request });
+        }
+        if (list.length > 0 && !isHostAllowed(finalHost, list)) {
           return failure(CurlError.BLOCKED_REDIRECT, { host: finalHost }, elapsed(), { request });
         }
       } catch {
@@ -529,11 +693,14 @@ export function formatResultForModel(result) {
   const shown = Object.entries(result.headers || {}).filter(([k]) => interesting.includes(k.toLowerCase()));
   if (shown.length > 0) {
     lines.push('headers:');
-    for (const [k, v] of shown) lines.push(`  ${k}: ${v}`);
+    // Response headers are attacker-controlled and can reflect a credential we
+    // sent (a `Location` echoing the request, say), so they are masked exactly
+    // like the body.
+    for (const [k, v] of shown) lines.push(`  ${k}: ${maskSecrets(v, secrets)}`);
   }
 
   lines.push('body:');
-  lines.push(maskSecrets(result.body || '', secrets));
+  lines.push(stripPartialSecretTail(maskSecrets(result.body || '', secrets), secrets));
   if (result.truncated) {
     lines.push(`[TRUNCATED at ${result.maxBytes} bytes — the response was longer than this limit.]`);
   }

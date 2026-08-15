@@ -53,9 +53,12 @@ export function stripThinking(text) {
   // Unterminated opening tag: everything after it is reasoning we never saw
   // the end of. Drop it rather than feed half a thought to the parser.
   out = out.replace(/<think(?:ing)?>[\s\S]*$/i, '');
-  // A stray closing tag with no opener means the opener was trimmed upstream.
-  const strayClose = out.match(/<\/think(?:ing)?>/i);
-  if (strayClose) out = out.slice(strayClose.index + strayClose[0].length);
+  // A stray closing tag has no reliable meaning: it can be a doubled closer
+  // after a complete block ("<think>x</think>answer</think>"), or a model
+  // talking about the tag. Deleting everything before it — the obvious reading
+  // — throws away the answer in both cases, so the tag alone is removed and
+  // every character of content is kept. Verbose output beats a blank reply.
+  out = out.replace(/<\/think(?:ing)?>/gi, '');
   return out.trim();
 }
 
@@ -105,8 +108,11 @@ export function extractJsonCandidate(text) {
   // Fenced blocks first. Accept an unterminated final fence too, since a
   // truncated stream commonly loses the closing backticks.
   const fence = /```[ \t]*([A-Za-z0-9_-]*)[ \t]*\r?\n([\s\S]*?)(?:```|$)/g;
+  /** @type {Array<[number, number]>} Spans of every fence, JSON or not. */
+  const fenceSpans = [];
   let m;
   while ((m = fence.exec(text)) !== null) {
+    fenceSpans.push([m.index, m.index + m[0].length]);
     const lang = m[1].toLowerCase();
     if (lang && lang !== 'json' && lang !== 'tool' && lang !== 'tool_call') continue;
     const inner = m[2].trim();
@@ -118,15 +124,48 @@ export function extractJsonCandidate(text) {
     return { json, prose };
   }
 
-  // Fallback: first balanced object in the raw text.
-  const open = text.indexOf('{');
-  if (open === -1) return null;
-  const end = matchBalanced(text, open);
-  if (end === -1) return { json: text.slice(open), prose: text.slice(0, open).trim() };
-  return {
-    json: text.slice(open, end),
-    prose: (text.slice(0, open) + text.slice(end)).trim(),
-  };
+  // Fallback: scan the raw text for balanced objects, but never inside a fence
+  // we already rejected. A ```python block illustrating a call the model
+  // explicitly declined to make must not be dispatched as a real one.
+  const inFence = (i) => fenceSpans.some(([a, b]) => i >= a && i < b);
+
+  // Try every balanced object, not just the first: prose routinely contains
+  // braces — including the {{credential}} placeholders the system prompt
+  // teaches the model to write — ahead of the real call.
+  let cursor = 0;
+  let firstCandidate = null;
+  while (cursor < text.length) {
+    const open = text.indexOf('{', cursor);
+    if (open === -1) break;
+    if (inFence(open)) {
+      cursor = open + 1;
+      continue;
+    }
+    const end = matchBalanced(text, open);
+    const json = end === -1 ? text.slice(open) : text.slice(open, end);
+    const prose = end === -1
+      ? text.slice(0, open).trim()
+      : (text.slice(0, open) + text.slice(end)).trim();
+    const candidate = { json, prose };
+
+    if (looksLikeToolJson(json)) return candidate;
+    if (firstCandidate === null) firstCandidate = candidate;
+    if (end === -1) break;
+    cursor = end;
+  }
+
+  return firstCandidate;
+}
+
+/**
+ * Cheap pre-check: does this fragment mention a `"tool"` key?
+ * Used to prefer a real call over incidental braces in prose.
+ *
+ * @param {string} json
+ * @returns {boolean}
+ */
+function looksLikeToolJson(json) {
+  return /"tool"\s*:/.test(json);
 }
 
 /** @param {string} code @param {string} message */

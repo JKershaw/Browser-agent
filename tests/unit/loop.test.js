@@ -50,8 +50,8 @@ describe('clampIterations', () => {
     [10, 10],
     [11, HARD_MAX_ITERATIONS],
     [999, HARD_MAX_ITERATIONS],
-    [0, DEFAULT_MAX_ITERATIONS],
-    [-3, DEFAULT_MAX_ITERATIONS],
+    [0, 1],
+    [-3, 1],
     ['4', 4],
     ['abc', DEFAULT_MAX_ITERATIONS],
     [undefined, DEFAULT_MAX_ITERATIONS],
@@ -236,15 +236,25 @@ describe('agent loop — confirmation and denial', () => {
     expect(r.stopReason).toBe(StopReason.TEXT);
   });
 
-  it('counts a denial against the iteration cap', async () => {
-    const { loop } = makeLoop({
+  it('does not charge a refusal against the tool-call budget', async () => {
+    // Denying suggestions must not silently exhaust a budget meant for
+    // requests that were actually sent; the pass loop still bounds the turn.
+    const notices = [];
+    const { loop, exec } = makeLoop({
       script: [toolCall()],
       settings: { confirmBeforeSend: true, maxIterations: 2 },
       confirm: async () => ({ approved: false }),
+      hooks: { onNotice: (n) => notices.push(n) },
     });
     const r = await loop.run('go');
     expect(r.stopReason).toBe(StopReason.CAP);
-    expect(r.iterations).toBe(2);
+    expect(r.iterations).toBe(0);
+    expect(exec).not.toHaveBeenCalled();
+    expect(loop.getState().denials).toBe(3);
+    // …and the notice tells the truth about what happened.
+    const capNotice = notices.at(-1).text;
+    expect(capNotice).toContain('3 refused requests');
+    expect(capNotice).not.toMatch(/\d+ tool calls/);
   });
 
   it('remembers an auto-approved host for the rest of the session', async () => {

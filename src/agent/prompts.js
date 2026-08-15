@@ -106,11 +106,19 @@ export function denialMessage(call, reason) {
 }
 
 /**
- * Notice appended when the agent hits its iteration cap.
+ * Notice shown when the agent stops because the turn ran out of room.
  *
- * @param {number} max
+ * Refusals are reported separately from sent requests: telling a user who
+ * denied everything that the agent "made 3 tool calls" is simply untrue.
+ *
+ * @param {number} sent Requests actually sent.
+ * @param {number} [denied] Requests the user refused.
  * @returns {string}
  */
-export function capMessage(max) {
-  return `Stopped after ${max} tool call${max === 1 ? '' : 's'} (the configured limit for one message). Ask again to continue.`;
+export function capMessage(sent, denied = 0) {
+  const parts = [];
+  if (sent > 0) parts.push(`${sent} tool call${sent === 1 ? '' : 's'}`);
+  if (denied > 0) parts.push(`${denied} refused request${denied === 1 ? '' : 's'}`);
+  const what = parts.length > 0 ? parts.join(' and ') : 'no completed tool calls';
+  return `Stopped after ${what} — this message reached its limit. Ask again to continue.`;
 }

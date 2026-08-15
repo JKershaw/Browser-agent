@@ -27,8 +27,22 @@ describe('stripThinking', () => {
     expect(stripThinking('Answer first.<think>then I trail off')).toBe('Answer first.');
   });
 
-  it('drops content before a stray closing tag', () => {
-    expect(stripThinking('leftover reasoning</think>the answer')).toBe('the answer');
+  it('keeps all content around a stray closing tag rather than guessing', () => {
+    // A stray closer is ambiguous — a doubled closer after a complete block, or
+    // the model talking about the tag. Deleting the text before it throws away
+    // the answer in both cases, so only the tag is removed.
+    expect(stripThinking('leftover reasoning</think>the answer'))
+      .toBe('leftover reasoningthe answer');
+  });
+
+  it('keeps the answer when the model doubles the closing tag', () => {
+    expect(stripThinking('<think>let me think</think>The answer is 42.</think>'))
+      .toBe('The answer is 42.');
+  });
+
+  it('does not delete a reply that merely mentions the tag', () => {
+    expect(stripThinking('Models emit </think> to end reasoning. Hope that helps!'))
+      .toBe('Models emit  to end reasoning. Hope that helps!');
   });
 
   it('leaves ordinary text untouched', () => {

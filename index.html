@@ -3,26 +3,73 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Browser Agent — M1 debug</title>
-    <style>
-      body { font: 14px/1.5 ui-monospace, monospace; margin: 0; padding: 1rem; max-width: 60rem; }
-      textarea { width: 100%; min-height: 4rem; font: inherit; }
-      pre { background: #f4f4f5; padding: .75rem; overflow-x: auto; white-space: pre-wrap; }
-      button { font: inherit; padding: .4rem .8rem; }
-    </style>
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="A chat agent that runs entirely in your browser and can make HTTP requests on your behalf. No backend, no data leaves your device except the requests you approve."
+    />
+    <title>Browser Agent</title>
   </head>
   <body>
-    <h1>Browser Agent — M1 debug page</h1>
-    <p>
-      Bare harness for the headless core (engine interface, tool-call parser, curl tool, agent loop).
-      The real UI arrives in M2. Append <code>?mockEngine=1</code> to drive it without a GPU.
-    </p>
-    <textarea id="input" placeholder="Ask something…"></textarea>
-    <p><button id="send">Send</button> <button id="cancel">Cancel</button></p>
-    <h2>Transcript</h2>
-    <pre id="out"></pre>
-    <h2>Request log</h2>
-    <pre id="log"></pre>
-    <script type="module" src="/src/debug.js"></script>
+    <!-- Shown only when the capability gate blocks startup. -->
+    <div id="gate"></div>
+
+    <div class="app" id="app">
+      <header class="topbar">
+        <h1>Browser Agent</h1>
+        <span class="spacer"></span>
+        <button
+          class="btn btn-icon" type="button" id="toggle-log"
+          aria-controls="log-sheet" aria-expanded="false"
+        >Log</button>
+        <button
+          class="btn btn-icon" type="button" id="toggle-settings"
+          aria-controls="settings-sheet" aria-expanded="false"
+        >Settings</button>
+      </header>
+
+      <p class="file-notice" id="file-notice" hidden>
+        Opened from a <code>file://</code> URL. The app works, but browsers do not cache model
+        weights reliably on file origins, so the model may re-download every session. Serving the
+        file over HTTP (or using the hosted URL) fixes that.
+      </p>
+
+      <div class="statsbar" id="statsbar" aria-live="off"></div>
+
+      <div class="main">
+        <div class="chat-column">
+          <div id="messages" role="log" aria-live="polite" aria-label="Conversation"></div>
+
+          <div class="composer">
+            <label class="visually-hidden" for="input">Message</label>
+            <textarea id="input" rows="1" placeholder="Ask for something…" autocomplete="off"></textarea>
+            <button class="btn btn-primary" type="button" id="send" disabled>Send</button>
+            <button class="btn btn-danger" type="button" id="stop" hidden>Stop</button>
+          </div>
+        </div>
+
+        <aside class="sheet" id="settings-sheet" data-open="false" aria-label="Settings">
+          <div class="sheet-head">
+            <h2>Settings</h2>
+            <span class="spacer"></span>
+            <button class="btn btn-small" type="button" id="close-settings">Close</button>
+          </div>
+          <div class="sheet-body" id="settings-body"></div>
+        </aside>
+
+        <aside class="sheet" id="log-sheet" data-open="false" aria-label="Request log">
+          <div class="sheet-head">
+            <h2>Request log</h2>
+            <span class="spacer"></span>
+            <button class="btn btn-small" type="button" id="close-log">Close</button>
+          </div>
+          <div class="sheet-body" id="log-body"></div>
+        </aside>
+      </div>
+    </div>
+
+    <div class="scrim" id="scrim" data-open="false"></div>
+
+    <script type="module" src="/src/main.js"></script>
   </body>
 </html>

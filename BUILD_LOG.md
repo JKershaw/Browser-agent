@@ -65,3 +65,126 @@ parser, curl tool, agent loop; unit tests green; bare debug page.
   signal (`abortedDecision()`), with a regression test.
 - **Body-cap truncation flag was wrong on a chunk boundary.** Caught by test;
   the implementation was correct and the test expectation was fixed.
+
+---
+
+## M1 adversarial review
+
+Three independent reviewers, each told to break the code rather than praise it:
+a **security** pass (threat model: the model's output is untrusted and may be
+prompt-injected by fetched content), a **correctness** pass, and a
+**spec-compliance** audit. All three proved their findings by executing code.
+The 319 tests passing at the time caught none of them.
+
+### Critical — fixed
+
+1. **A stored credential could be exfiltrated to any host.**
+   `applyCredentials` matched credentials by name only, ignoring the `hosts`
+   scope that `attachHostCredentials` enforced — and the system prompt hands the
+   model every credential *name*. An injected page could therefore make the
+   model emit `{"headers": {"X-Z": "{{github}}"}}` pointed at an attacker and the
+   token went with it. `hosts` is now enforced on both paths; a withheld
+   credential is reported as `credentialsBlocked` and shown on the card.
+
+2. **`stripThinking` could delete the entire reply.** A stray `</think>` — which
+   Qwen3 produces routinely by doubling its closing tag — caused everything
+   before it to be dropped. The user got a blank bubble; a tool call in that
+   reply vanished with no repair round and no notice. Stray closers now have the
+   tag removed and all content kept.
+
+3. **An illustrative code fence was dispatched as a real request.** The fence
+   scanner skipped a ```js block, then the raw-text fallback found the `{`
+   *inside the block it had just rejected*. A model explicitly declining to make
+   a request ("You would write: … But I will not do that.") had that request
+   proposed anyway. Fence spans are now excluded from the fallback scan.
+
+### High — fixed
+
+4. **Response headers were never masked**, so a server reflecting a credential
+   into a header (`Location: /next?leak=<token>`) fed it to the model, the chat
+   card, the log and the export. Masked in all four now.
+
+5. **A cross-host redirect carried credentials off-site.** The redirect check ran
+   only when an allowlist was configured — which is not the default — and the
+   browser strips only `Authorization`/`Cookie`, so an author-set `X-Api-Key`
+   followed the redirect. Any credentialled request redirected to a different
+   host is now discarded with an explanation that says to rotate the credential.
+
+6. **Auto-approving a host auto-approved credentialled requests to it.** The
+   natural flow — read an attacker's page, approve once, tick "auto-approve" —
+   let injected instructions attach a stored token to a follow-up with no
+   prompt. A request that would use a credential now always shows the card.
+
+7. **Denials never reached the log.** `app.js` looked for "the last pending
+   entry", but a denied call is refused *before* dispatch, so no entry existed;
+   with a stale pending entry it marked the *wrong* request denied. The entry is
+   now opened when a call is proposed and settled, denied or released explicitly.
+
+### Medium / low — fixed
+
+8. Auto-attached credentials were invisible at confirmation time; the card now
+   names them via `describeCredentialUse`.
+9. The confirmation card masked `{{placeholders}}` — hiding exactly the
+   information needed to judge a request, and specifically for `Authorization`.
+   `previewHeaders` now shows placeholders and masks only real secrets.
+10. An allowlist plus a proxy failed *every* request as `blocked_redirect`
+    (the observed final URL is the proxy's), pushing users to disable the
+    allowlist. The post-hoc check is skipped when proxied.
+11. The proxy template — which often carries the user's own proxy API key —
+    was echoed into the model's context and the log. Now redacted.
+12. Plaintext secrets rode along in the result object; `JSON.stringify` of a
+    hook payload or transcript entry leaked everything. `headers` and `body` on
+    the result are pre-masked and the raw values are non-enumerable.
+13. Session-only credentials could be written to disk two ways: round-tripping
+    `get().credentials` through `set()`, and a patch key explicitly set to
+    `undefined`. The invariant is now enforced in `sanitize` itself.
+14. `totalTokens` double-counted whenever a stream carried no usage chunk, and
+    never reset across model switches.
+15. **The thinking-mode toggle did nothing.** It reached the prompt text but not
+    `engine.generate`, so reasoning was always disabled. Plumbed through the
+    engine contract.
+16. A throw from the tool or the confirmation handler ended a turn with no
+    `stopReason` and no `onTurnEnd`; both are now caught as `TOOL_ERROR`.
+17. One abort listener leaked per confirmation card.
+18. Refusals consumed the tool-call budget and the cap notice then claimed the
+    agent "made 3 tool calls" when it had sent none. Refusals are counted
+    separately and reported honestly.
+19. An unparseable numeric setting reset the preference to its factory default
+    instead of keeping the current value.
+20. `clampIterations(0)` returned 5; it now clamps into range.
+21. SPEC §5.3 truncation was only enforced inside the tool, not on the tool
+    *result*; `truncateForModel` now bounds what reaches the transcript.
+
+### Accepted, not changed
+
+- `generate` streams via an `onDelta` callback and returns the final string,
+  rather than being an async iterator. §4.3 says "streaming" without fixing the
+  shape; the callback form is what the UI needs.
+- Very short secrets (< 3 characters) are documented as unmaskable rather than
+  half-masked — masking them would replace ordinary substrings everywhere.
+
+**50 regression tests** covering every finding above live in
+`tests/unit/security.test.js`, named after the finding they pin down.
+
+---
+
+## M2 — UI
+
+Chat pane, settings sheet, stats bar, request log and the confirmation flow, in
+vanilla JS with no framework.
+
+- **No `innerHTML` anywhere in `src/ui/`.** Model output, response bodies and
+  header values are all attacker-influenceable, so `ui/dom.js` is the only
+  element factory and it sets text via `textContent` exclusively.
+- Mobile-first CSS: the phone layout is the base, and one `min-width: 60rem`
+  breakpoint promotes the settings and log sheets into a permanent side rail.
+- Successful tool cards collapse to their summary line; failures stay open.
+  Response headers show the notable ones with the rest behind a disclosure.
+- Confirmation cards are full-width and thumb-sized on a phone, name any
+  credential the request would carry, and show placeholders rather than masking
+  them.
+
+### Verification
+
+- **371 unit tests**, 12 Playwright scenarios green against the built artifact.
+- Screenshots checked at 1280×860 (light and dark) and 390×844 (mobile).

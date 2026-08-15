@@ -168,10 +168,18 @@ export function createWebLLMEngine(opts = {}) {
       });
       modelId = id;
       lastUsage = null;
+      // "Tokens this conversation" (SPEC §8.3) is meaningless across a model
+      // swap, so the counter starts again with the new model.
+      totalTokens = 0;
     },
 
     async generate(messages, options = {}) {
       if (!engine) throw new Error('No model is loaded yet.');
+
+      // Cleared per call: a stream that yields no usage chunk (interrupted
+      // generation, or a runtime that omits it) would otherwise re-add the
+      // previous turn's token count every time.
+      lastUsage = null;
 
       const onAbort = () => {
         try {
@@ -199,7 +207,7 @@ export function createWebLLMEngine(opts = {}) {
         };
         // Qwen3 hybrid thinking is off unless explicitly enabled: reasoning
         // tokens triple the latency of every tool round-trip (SPEC §4.2).
-        if (options.thinking === false || options.thinking === undefined) {
+        if (options.thinking !== true) {
           request.extra_body = { enable_thinking: false };
         }
 
@@ -243,6 +251,8 @@ export function createWebLLMEngine(opts = {}) {
         engine = null;
       }
       modelId = null;
+      lastUsage = null;
+      totalTokens = 0;
     },
   };
 }

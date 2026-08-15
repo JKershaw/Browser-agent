@@ -58,21 +58,46 @@ export function createApp(opts = {}) {
     opts.engine || (wantsMockEngine() ? createMockEngine({ script: mockScriptFromUrl(), deltaMs: 8 }) : createWebLLMEngine({ navigator: opts.navigator }))
   );
 
-  /** Run one tool call: log it, execute it, settle the log entry. */
+  /**
+   * The log entry for the call currently being decided on.
+   *
+   * The entry is opened when the loop *proposes* a call, not when the request
+   * is dispatched, because a denied call is never dispatched at all — and a
+   * denial the user made is exactly the kind of thing the record must contain.
+   * Holding the id here also means a denial can never be attributed to some
+   * other request that happens to be pending.
+   *
+   * @type {{id: string}|null}
+   */
+  let openEntry = null;
+
+  /** Run one tool call: execute it and settle the entry opened for it. */
   async function executeTool(call, ctx) {
     const s = settings.get();
-    const entry = log.start(call);
-    const result = await executeCurl(call.args, {
-      fetchImpl: opts.fetchImpl,
-      timeoutMs: s.timeoutMs,
-      maxBytes: s.maxBytes,
-      proxyTemplate: s.proxyTemplate,
-      allowlist: s.allowlist,
-      credentials: s.credentials,
-      signal: ctx?.signal,
-    });
-    log.settle(entry.id, result);
-    return result;
+    const entry = openEntry ?? log.start(call);
+    openEntry = null;
+    try {
+      const result = await executeCurl(call.args, {
+        fetchImpl: opts.fetchImpl,
+        timeoutMs: s.timeoutMs,
+        maxBytes: s.maxBytes,
+        proxyTemplate: s.proxyTemplate,
+        allowlist: s.allowlist,
+        credentials: s.credentials,
+        signal: ctx?.signal,
+      });
+      log.settle(entry.id, result);
+      return result;
+    } catch (e) {
+      // `executeCurl` is contracted not to throw, so this is a bug rather than
+      // an expected path — but an entry stuck at "pending" forever is worse
+      // than an honest error, and the loop turns the rethrow into a notice.
+      log.settle(entry.id, {
+        ok: false,
+        error: { kind: 'internal', message: `The tool crashed: ${e?.message || e}` },
+      });
+      throw e;
+    }
   }
 
   const loop = createAgentLoop({
@@ -83,11 +108,25 @@ export function createApp(opts = {}) {
     confirm: opts.confirm,
     hooks: {
       ...opts.hooks,
+      onToolCall: (payload) => {
+        openEntry = log.start(payload.call);
+        opts.hooks?.onToolCall?.(payload);
+      },
       onToolDenied: (payload) => {
-        // Mirror the denial into the log so the record is complete.
-        const pending = log.all().filter((e) => e.status === 'pending').at(-1);
-        if (pending) log.deny(pending.id, payload.reason);
+        if (openEntry) {
+          log.deny(openEntry.id, payload.reason);
+          openEntry = null;
+        }
         opts.hooks?.onToolDenied?.(payload);
+      },
+      onTurnEnd: (payload) => {
+        // A turn can end between proposal and dispatch (cancellation), which
+        // would otherwise strand the entry as pending forever.
+        if (openEntry) {
+          log.deny(openEntry.id, 'The turn ended before this request was sent.');
+          openEntry = null;
+        }
+        opts.hooks?.onTurnEnd?.(payload);
       },
     },
   });

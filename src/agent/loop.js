@@ -9,6 +9,7 @@
  */
 
 import { parseToolCall, repairPrompt } from './toolcall.js';
+import { describeCredentialUse } from '../tools/curl.js';
 import { buildSystemPrompt, capMessage, denialMessage, toolResultMessage } from './prompts.js';
 
 /** Why a turn ended. @enum {string} */
@@ -17,8 +18,29 @@ export const StopReason = Object.freeze({
   CAP: 'cap',
   CANCELLED: 'cancelled',
   ENGINE_ERROR: 'engine_error',
+  TOOL_ERROR: 'tool_error',
   UNPARSEABLE: 'unparseable',
 });
+
+/**
+ * Absolute ceiling on the tool-result text appended to the transcript.
+ *
+ * `curl.js` caps the HTTP *body*, but the status line, headers and truncation
+ * marker are added on top of that, and a different executor might not cap at
+ * all. SPEC §5.3 puts the limit on the tool result, so it is enforced here too.
+ *
+ * @param {string} text
+ * @param {number} [maxBytes]
+ * @returns {string}
+ */
+export function truncateForModel(text, maxBytes = 8 * 1024) {
+  // Allow headroom for the wrapper the tool result adds around the body.
+  const cap = Math.max(256, Math.floor(Number(maxBytes) || 0)) + 1024;
+  const encoded = new TextEncoder().encode(text);
+  if (encoded.length <= cap) return text;
+  const cut = new TextDecoder().decode(encoded.slice(0, cap));
+  return `${cut}\n[TRUNCATED: the tool result exceeded ${cap} bytes and was cut here.]`;
+}
 
 /** Hard ceiling on iterations regardless of settings (SPEC §5.3). */
 export const HARD_MAX_ITERATIONS = 10;
@@ -35,8 +57,8 @@ const ALWAYS_CONFIRM_METHODS = Object.freeze(['DELETE']);
  */
 export function clampIterations(value) {
   const n = Math.floor(Number(value));
-  if (!Number.isFinite(n) || n < 1) return DEFAULT_MAX_ITERATIONS;
-  return Math.min(n, HARD_MAX_ITERATIONS);
+  if (!Number.isFinite(n)) return DEFAULT_MAX_ITERATIONS;
+  return Math.min(Math.max(n, 1), HARD_MAX_ITERATIONS);
 }
 
 /**
@@ -50,9 +72,16 @@ export function clampIterations(value) {
  * @param {{autoApprovedHosts?: Set<string>}} [session]
  * @returns {boolean}
  */
-export function shouldConfirm(call, settings, session = {}) {
+export function shouldConfirm(call, settings, session = {}, credentialUse = null) {
   const method = String(call?.args?.method || 'GET').toUpperCase();
   if (ALWAYS_CONFIRM_METHODS.includes(method)) return true;
+
+  // Auto-approving a host must not auto-approve *credentialled* requests to it.
+  // Otherwise the natural flow — "read this page for me", approve once, tick
+  // the box — lets injected instructions on that page attach a stored token to
+  // a follow-up request with no further prompt.
+  if (credentialUse && credentialUse.used.length > 0) return true;
+
   if (!settings?.confirmBeforeSend) return false;
   let host;
   try {
@@ -122,6 +151,7 @@ export function createAgentLoop(deps) {
     maxIterations: DEFAULT_MAX_ITERATIONS,
     pendingConfirmation: null,
     repairs: 0,
+    denials: 0,
     stopReason: null,
   };
 
@@ -160,6 +190,7 @@ export function createAgentLoop(deps) {
       running: true,
       iteration: 0,
       repairs: 0,
+      denials: 0,
       pendingConfirmation: null,
       stopReason: null,
       maxIterations: clampIterations(settings0.maxIterations),
@@ -207,31 +238,56 @@ export function createAgentLoop(deps) {
 
         // --- a valid tool call ---
         if (state.iteration >= state.maxIterations) {
-          emit('onNotice', { kind: 'info', text: capMessage(state.maxIterations) });
+          emit('onNotice', { kind: 'info', text: capMessage(state.iteration, state.denials) });
           return finish(StopReason.CAP);
         }
 
         push('assistant', parsed.raw, { toolCall: parsed.call, prose: parsed.prose });
-        setState({ iteration: state.iteration + 1 });
-        emit('onToolCall', { call: parsed.call, iteration: state.iteration });
+        emit('onToolCall', { call: parsed.call, iteration: state.iteration + 1 });
 
-        const decision = await decide(parsed.call, settings);
+        let decision;
+        try {
+          decision = await decide(parsed.call, settings);
+        } catch (e) {
+          if (controller.signal.aborted) return finish(StopReason.CANCELLED);
+          emit('onNotice', { kind: 'error', text: `The confirmation step failed: ${e?.message || e}. Nothing was sent.` });
+          return finish(StopReason.TOOL_ERROR);
+        }
         if (controller.signal.aborted) return finish(StopReason.CANCELLED);
 
         if (!decision.approved) {
+          // A refusal costs no iteration: the user denying three suggestions
+          // must not silently exhaust a budget meant for requests that were
+          // actually sent. The pass loop still bounds the turn.
+          setState({ denials: state.denials + 1 });
           emit('onToolDenied', { call: parsed.call, reason: decision.reason });
           push('tool', denialMessage(parsed.call.args, decision.reason), { denied: true, call: parsed.call });
           continue;
         }
 
-        const result = await executeTool(parsed.call, { signal: controller.signal, settings });
+        setState({ iteration: state.iteration + 1 });
+
+        let result;
+        try {
+          result = await executeTool(parsed.call, { signal: controller.signal, settings });
+        } catch (e) {
+          if (controller.signal.aborted) return finish(StopReason.CANCELLED);
+          // The tool contract is to return an error object, never to throw, so
+          // reaching here is a bug in the executor. Report it honestly instead
+          // of letting run() reject with no stopReason and no onTurnEnd.
+          emit('onNotice', { kind: 'error', text: `The tool crashed: ${e?.message || e}. The turn was stopped.` });
+          return finish(StopReason.TOOL_ERROR);
+        }
         if (controller.signal.aborted) return finish(StopReason.CANCELLED);
         emit('onToolResult', { call: parsed.call, result, iteration: state.iteration });
-        push('tool', toolResultMessage(formatResult(result)), { call: parsed.call, result });
+        push('tool', truncateForModel(toolResultMessage(formatResult(result)), settings.maxBytes), {
+          call: parsed.call,
+          result,
+        });
       }
 
-      /* c8 ignore next 3 -- unreachable: the cap check above returns first */
-      emit('onNotice', { kind: 'info', text: capMessage(state.maxIterations) });
+      // Reachable when refusals (which cost no iteration) use up every pass.
+      emit('onNotice', { kind: 'info', text: capMessage(state.iteration, state.denials) });
       return finish(StopReason.CAP);
     } finally {
       setState({ running: false, pendingConfirmation: null });
@@ -244,6 +300,7 @@ export function createAgentLoop(deps) {
     const raw = await engine.generate(messages, {
       temperature: settings.temperature,
       maxTokens: settings.maxTokens,
+      thinking: Boolean(settings.thinking),
       signal: controller.signal,
       onDelta: (d) => emit('onDelta', d),
     });
@@ -266,6 +323,7 @@ export function createAgentLoop(deps) {
     const retryRaw = await engine.generate(repairMessages, {
       temperature: settings.temperature,
       maxTokens: settings.maxTokens,
+      thinking: Boolean(settings.thinking),
       signal: controller.signal,
       onDelta: (d) => emit('onDelta', d),
     });
@@ -277,19 +335,22 @@ export function createAgentLoop(deps) {
 
   /** Apply the confirmation policy to one call. */
   async function decide(call, settings) {
-    if (!shouldConfirm(call, settings, session)) return { approved: true };
+    const credentialUse = describeCredentialUse(call.args, settings.credentials || []);
+    if (!shouldConfirm(call, settings, session, credentialUse)) return { approved: true };
     if (typeof confirm !== 'function') {
       return { approved: false, reason: 'No confirmation handler is available, so the request was not sent.' };
     }
 
     setState({ pendingConfirmation: call });
+    const aborted = abortedDecision();
     let decision;
     try {
       // Race the card against cancellation: a user who presses stop while a
       // confirmation is open must not leave the turn waiting forever on a
       // promise the UI will never settle.
-      decision = await Promise.race([confirm(call), abortedDecision()]);
+      decision = await Promise.race([confirm(call, credentialUse), aborted.promise]);
     } finally {
+      aborted.release();
       setState({ pendingConfirmation: null });
     }
 
@@ -304,16 +365,26 @@ export function createAgentLoop(deps) {
     return { approved, reason: decision?.reason };
   }
 
-  /** Resolves to a denial as soon as the turn is cancelled. */
+  /**
+   * Resolves to a denial as soon as the turn is cancelled.
+   * Returns a `release` so the listener is removed when the confirmation wins
+   * the race — otherwise every card leaves one attached for the turn's life.
+   *
+   * @returns {{promise: Promise<object>, release: () => void}}
+   */
   function abortedDecision() {
-    return new Promise((resolve) => {
-      const signal = controller.signal;
+    const signal = controller.signal;
+    let release = () => {};
+    const promise = new Promise((resolve) => {
+      const onAbort = () => resolve({ approved: false, reason: 'Cancelled.' });
       if (signal.aborted) {
-        resolve({ approved: false, reason: 'Cancelled.' });
+        onAbort();
         return;
       }
-      signal.addEventListener('abort', () => resolve({ approved: false, reason: 'Cancelled.' }), { once: true });
+      signal.addEventListener('abort', onAbort, { once: true });
+      release = () => signal.removeEventListener('abort', onAbort);
     });
+    return { promise, release };
   }
 
   function finish(reason) {
@@ -325,14 +396,15 @@ export function createAgentLoop(deps) {
   return {
     run,
     cancel() {
-      if (controller) controller.abort();
+      if (!state.running) return;
+      controller?.abort();
       emit('onNotice', { kind: 'info', text: 'Cancelled.' });
     },
     getState: () => ({ ...state, autoApprovedHosts: [...session.autoApprovedHosts] }),
     reset() {
       transcript.length = 0;
       session.autoApprovedHosts.clear();
-      setState({ iteration: 0, repairs: 0, stopReason: null, pendingConfirmation: null });
+      setState({ iteration: 0, repairs: 0, denials: 0, stopReason: null, pendingConfirmation: null });
     },
     transcript,
   };

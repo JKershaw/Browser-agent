@@ -56,10 +56,10 @@ function nextId(prefix = 'cred') {
  * @param {object} input
  * @returns {object}
  */
-export function sanitize(input) {
+export function sanitize(input, base = DEFAULTS) {
   const src = input && typeof input === 'object' ? input : {};
   /** @type {any} */
-  const out = { ...DEFAULTS };
+  const out = { ...DEFAULTS, ...(base && typeof base === 'object' ? base : {}) };
 
   for (const key of Object.keys(DEFAULTS)) {
     if (!(key in src)) continue;
@@ -68,6 +68,8 @@ export function sanitize(input) {
     if (key in NUMERIC_BOUNDS) {
       const [lo, hi] = NUMERIC_BOUNDS[key];
       const n = Number(value);
+      // An unparseable number keeps the previous value rather than silently
+      // resetting the preference to its factory default.
       if (Number.isFinite(n)) out[key] = Math.min(hi, Math.max(lo, n));
       continue;
     }
@@ -82,7 +84,12 @@ export function sanitize(input) {
       continue;
     }
     if (key === 'credentials') {
-      out.credentials = Array.isArray(value) ? value.map(sanitizeCredential).filter(Boolean) : [];
+      // Invariant enforced here, at the only door into the persisted blob: a
+      // session-only credential must never reach storage, however it arrives —
+      // including via a caller that round-trips get().credentials back in.
+      out.credentials = Array.isArray(value)
+        ? value.map(sanitizeCredential).filter((c) => c && !c.sessionOnly)
+        : [];
       continue;
     }
     if (key === 'schemaVersion') continue;
@@ -227,7 +234,7 @@ export function createSettingsStore(opts = {}) {
      * @param {object} patch
      */
     set(patch) {
-      current = sanitize({ ...current, ...patch });
+      current = sanitize(patch, current);
       persist();
       notify();
       return get();
@@ -259,7 +266,13 @@ export function createSettingsStore(opts = {}) {
     updateCredential(id, patch) {
       const existing = [...current.credentials, ...sessionCredentials].find((c) => c.id === id);
       if (!existing) return null;
-      const clean = sanitizeCredential({ ...existing, ...patch, id });
+      // Drop keys explicitly set to undefined: a form serialiser emitting
+      // `sessionOnly: undefined` must not quietly move a memory-only secret
+      // onto disk.
+      const definedPatch = Object.fromEntries(
+        Object.entries(patch || {}).filter(([, v]) => v !== undefined)
+      );
+      const clean = sanitizeCredential({ ...existing, ...definedPatch, id });
       if (!clean) return null;
       sessionCredentials = sessionCredentials.filter((c) => c.id !== id);
       current = { ...current, credentials: current.credentials.filter((c) => c.id !== id) };

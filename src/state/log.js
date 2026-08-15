@@ -84,7 +84,9 @@ export function createRequestLog(opts = {}) {
           response: {
             status: result.status,
             statusText: result.statusText,
-            headers: result.headers,
+            // Response headers are attacker-controlled and can reflect a
+            // credential we sent, so they are masked like the body.
+            headers: maskHeaders(result.headers || {}, secrets),
             body: maskSecrets(result.body ?? '', secrets),
             truncated: Boolean(result.truncated),
             redirected: Boolean(result.redirected),

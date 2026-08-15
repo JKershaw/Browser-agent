@@ -229,3 +229,79 @@ test('stop cancels a turn and closes an open confirmation card', async ({ open, 
   // The app is usable again.
   await expect(page.locator('#send')).toBeEnabled();
 });
+
+test('a POST carries its body and headers to the server', async ({ open, target }) => {
+  // Only GET was ever exercised through the real UI; a body never left the
+  // browser in any e2e scenario.
+  const page = await open([
+    toolCall({
+      method: 'POST',
+      url: `${target.url}/echo`,
+      headers: { 'Content-Type': 'application/json' },
+      body: '{"hello":"world"}',
+    }),
+    'Posted.',
+  ]);
+
+  await send(page, 'post it');
+  await page.locator('.confirm-card .btn-approve').click({ timeout: 5000 });
+  await settled(page);
+
+  const hit = target.received().find((r) => r.path === '/echo');
+  expect(hit.method).toBe('POST');
+  expect(hit.body).toBe('{"hello":"world"}');
+  expect(hit.headers['content-type']).toContain('application/json');
+  await expect(page.locator('.tool-card').first()).toHaveClass(/tool-good/);
+});
+
+test('a redirect is followed and reported, in a real browser', async ({ open, target }) => {
+  // Both redirect defences rest on response.url being populated after a
+  // followed 302 — an assumption about browser behaviour that unit tests can
+  // only assert against a hand-rolled fake.
+  const page = await open([
+    toolCall({ url: `${target.url}/redirect?to=${encodeURIComponent(`${target.url}/json`)}` }),
+    'Followed it.',
+  ]);
+
+  await send(page, 'fetch it');
+  await page.locator('.confirm-card .btn-approve').click({ timeout: 5000 });
+  await settled(page);
+
+  const tool = page.locator('.tool-card').first();
+  await expect(tool).toHaveClass(/tool-good/);
+  await tool.locator('.tool-details > summary').click();
+  await expect(tool).toContainText('redirected to');
+  await expect(tool).toContainText('Bristol');
+  expect(target.received().map((r) => r.path)).toEqual(
+    expect.arrayContaining([expect.stringContaining('/redirect'), '/json'])
+  );
+});
+
+test('a credentialled request redirected off-host is discarded, in a real browser', async ({ open, page, target }) => {
+  // The 302 points at a *different* host, which is where the browser's
+  // Authorization-stripping stops mattering and ours has to take over.
+  const elsewhere = `http://localhost:${target.port}/json`;
+  const page_ = await open([
+    toolCall({
+      url: `${target.url}/redirect?to=${encodeURIComponent(elsewhere)}`,
+      headers: { 'X-Api-Key': '{{Red}}' },
+    }),
+    'It was blocked.',
+  ]);
+
+  await page_.locator('#toggle-settings').click();
+  await page_.getByPlaceholder('Name (e.g. GitHub)').fill('Red');
+  await page_.getByPlaceholder('Secret value').fill('tok_redirect_guard_1234');
+  await page_.getByRole('button', { name: 'Add credential' }).click();
+  await page_.locator('#close-settings').click();
+
+  await send(page_, 'fetch it');
+  await page_.locator('.confirm-card .btn-approve').click({ timeout: 5000 });
+  await settled(page_);
+
+  const tool = page_.locator('.tool-card').first();
+  await expect(tool).toHaveClass(/tool-error/);
+  await expect(tool).toContainText('rotate it');
+  // The attacker-side body must never be shown.
+  await expect(tool).not.toContainText('Bristol');
+});

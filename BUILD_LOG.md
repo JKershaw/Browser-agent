@@ -322,3 +322,91 @@ split rule is a pure function so it is tested without a DOM.
   proxy disclosure, sub-domain wrapping, the cancelled-card contradiction, caret
   orphaning, history preservation, settings-draft survival and the pre-load
   Enter guard.
+
+---
+
+## M4 adversarial review — test quality
+
+The most useful review of the four. A reviewer ran ~100 targeted mutations
+against `src/`, checking whether the suite that was passing would actually
+notice each one. Its verdict on the core was reassuring — all 18 mutations to
+`curl.js`'s security logic died, as did all 16 to `toolcall.js`, the
+`shouldConfirm` policy and the iteration cap — and the shuffle/isolation runs
+found no order-dependence. The weaknesses were all at the edges.
+
+### Tests that could not fail
+
+Four tests were structurally incapable of failing, and one asserted the
+opposite of its own name:
+
+1. **`sanitize` "fills every default"** compared the function's output against
+   the very constant it copies, so it passed for *any* value of `DEFAULTS`.
+   This single tautology is why seven default-value mutations survived —
+   including flipping **confirm-before-send to off**, the spec's headline
+   security default. Replaced with a literal, spelled-out expectation.
+2. **`clampIterations`** used the constants as its own expected values. Now
+   literal, with the spec's numbers pinned separately.
+3. **"does not leak an abort listener per confirmation"** watched for Node's
+   `MaxListeners` warning, which fires at 10 — with five confirmations it could
+   never trigger, leak or no leak. Now counts `addEventListener`/
+   `removeEventListener` on `AbortSignal` directly and asserts they balance.
+4. **"does not remember a host it cannot parse"** used a perfectly valid URL and
+   asserted the success path. Deleted: the branch it named is covered directly
+   by `originOf`, and there is no honest way to reach it through the loop.
+5. **"tolerates a confirm handler returning undefined"** asserted only that
+   nothing was sent — it stayed green when the loop threw a `TypeError` and
+   ended the turn as `tool_error`. Now asserts the turn completes normally and
+   the model is told it was denied.
+
+Two e2e tests were similarly hollow: the log-export test asserted only the
+*filename* — never that the file was JSON, never that anything was masked, and
+it configured no credential so there was nothing to mask; and the `file://`
+notice test never loaded a `file://` origin, asserting only that the notice
+stays hidden over HTTP. Both now do the thing their names claim.
+
+### Mutations that survived the entire apparatus
+
+Seven changes passed both the unit suite and all 30 e2e scenarios. Four were in
+`app.js` — the composition root, where every setting meets the tool, sitting at
+48% branch coverage behind `toolcall.js`'s 99%:
+
+- **The CORS proxy could be disconnected entirely** and everything stayed green.
+  `curl.js`'s proxy logic was well tested in isolation; that the *setting*
+  reached it was tested by nothing.
+- **The abort signal could be dropped**, so Stop could not cancel an in-flight
+  request. Every cancellation test cancelled at the confirmation card, never
+  mid-fetch.
+- The timeout, byte cap and credential list could all be disconnected the same way.
+
+`app.js` now has tests asserting each setting reaches `executeCurl` — verified
+against a spy `fetchImpl`, including one that hangs the request so cancellation
+is exercised where it actually matters.
+
+### Also closed
+
+- **Per-file coverage thresholds.** The 90% gate was global-only, which is what
+  let `app.js` hide. Now `perFile: true`; `app.js` is at 100% statements / 80%
+  branches.
+- **Error message text is asserted for all 11 `CurlError` classes**, not just
+  the `kind`. Five previously asserted only the code, so the prose SPEC §6.3
+  makes a first-class requirement could be replaced with `'x'` unnoticed. Doing
+  this surfaced that the `cancelled` message really was too terse to be useful;
+  it now says the request may or may not have reached the server.
+- **Prompt text has its own test file.** SPEC §10 calls it load-bearing, and it
+  was untested: the iteration budget, the allowlist disclosure and the
+  "do not emit reasoning" line could each be deleted silently.
+- **`POST` with a body and both redirect defences are now exercised in a real
+  browser.** The redirect rules rest on `response.url` being populated after a
+  followed 302 — an assumption about browser behaviour that unit tests could
+  only assert against a hand-rolled fake. The test server had a `/redirect`
+  route that no e2e test used.
+- The `readBodyCapped` "unknown size" contract, `log.requestBody`, the live
+  iteration counter, the post-request abort check, and settings being re-read
+  each pass all now have assertions.
+
+### Verification
+
+- **474 unit tests, 43 Playwright scenarios**, per-file coverage gate green
+  (97.9% statements, 92.4% branches overall).
+- Every mutation the reviewer proved survivable was re-run against the new
+  suite. All now fail the build.

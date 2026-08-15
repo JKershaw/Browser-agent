@@ -385,14 +385,44 @@ describe('the request log records denials', () => {
   });
 
   it('never strands an entry as pending when the tool throws', async () => {
+    // executeCurl is contracted not to throw, and it honours that for network
+    // failures — so this forces a genuine contract violation: a Response whose
+    // header enumeration blows up, escaping executeCurl's own error handling.
     const app = createApp({
       storage: createMemoryStorage(),
       engine: createMockEngine({ script: ['```json\n{"tool":"curl","args":{"url":"https://api.test/x"}}\n```'] }),
-      fetchImpl: () => { throw new Error('boom'); },
+      fetchImpl: async () => ({
+        status: 200,
+        statusText: 'OK',
+        url: '',
+        headers: { forEach() { throw new Error('hostile Response object'); } },
+        async text() { return 'x'; },
+      }),
     });
     app.settings.set({ confirmBeforeSend: false });
-    await app.loop.run('go');
-    expect(app.log.all().every((e) => e.status !== 'pending')).toBe(true);
+    const r = await app.loop.run('go');
+
+    // The turn ends honestly rather than hanging or claiming success…
+    expect(r.stopReason).toBe('tool_error');
+    // …and the entry is settled as an error, not left pending forever.
+    const entry = app.log.all()[0];
+    expect(entry.status).toBe('error');
+    expect(entry.error.message).toContain('hostile Response object');
+  });
+
+  it('still reports a plain network failure as a normal tool error', async () => {
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine({
+        script: ['```json\n{"tool":"curl","args":{"url":"https://api.test/x"}}\n```', 'It failed.'],
+      }),
+      fetchImpl: () => { throw new TypeError('Failed to fetch'); },
+    });
+    app.settings.set({ confirmBeforeSend: false });
+    const r = await app.loop.run('go');
+    // A refused connection is expected, not a crash: the turn completes.
+    expect(r.stopReason).toBe('text');
+    expect(app.log.all()[0]).toMatchObject({ status: 'error', error: { kind: 'network' } });
   });
 });
 
@@ -459,17 +489,37 @@ describe('a turn always ends cleanly', () => {
   });
 
   it('does not leak an abort listener per confirmation', async () => {
-    const loop = makeLoop({
-      getSettings: () => ({ confirmBeforeSend: true, maxIterations: 5, credentials: [] }),
-      confirm: async () => ({ approved: true }),
-      engine: createMockEngine({ script: ['```json\n{"tool":"curl","args":{"url":"https://a.test"}}\n```'] }),
-    });
-    // 5 confirmations in one turn; each used to leave a listener attached.
-    const warn = vi.spyOn(process, 'emitWarning');
-    await loop.run('go');
-    const leakWarning = warn.mock.calls.find(([w]) => String(w).includes('MaxListeners'));
-    expect(leakWarning).toBeUndefined();
-    warn.mockRestore();
+    // Counted directly. The previous version watched for Node's MaxListeners
+    // warning, which fires at 10 — with five confirmations it could never
+    // trigger, so the test passed whether or not the listener was removed.
+    const added = [];
+    const removed = [];
+    const origAdd = AbortSignal.prototype.addEventListener;
+    const origRemove = AbortSignal.prototype.removeEventListener;
+    AbortSignal.prototype.addEventListener = function (type, ...rest) {
+      if (type === 'abort') added.push(this);
+      return origAdd.call(this, type, ...rest);
+    };
+    AbortSignal.prototype.removeEventListener = function (type, ...rest) {
+      if (type === 'abort') removed.push(this);
+      return origRemove.call(this, type, ...rest);
+    };
+
+    try {
+      const loop = makeLoop({
+        getSettings: () => ({ confirmBeforeSend: true, maxIterations: 5, credentials: [] }),
+        confirm: async () => ({ approved: true }),
+        engine: createMockEngine({ script: ['```json\n{"tool":"curl","args":{"url":"https://a.test"}}\n```'] }),
+      });
+      await loop.run('go');
+    } finally {
+      AbortSignal.prototype.addEventListener = origAdd;
+      AbortSignal.prototype.removeEventListener = origRemove;
+    }
+
+    // Five confirmations, five listeners, five removals.
+    expect(added.length).toBeGreaterThanOrEqual(5);
+    expect(removed.length).toBe(added.length);
   });
 
   it('stays quiet when cancel is called with no turn running', () => {

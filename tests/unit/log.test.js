@@ -28,6 +28,19 @@ describe('createRequestLog', () => {
     expect(log.size()).toBe(1);
   });
 
+  it('records the request body, which is half of what a request was', () => {
+    const log = createRequestLog();
+    log.start(call({ method: 'POST', body: '{"a":1}' }));
+    expect(log.all()[0].requestBody).toBe('{"a":1}');
+    expect(JSON.parse(log.toJSON()).entries[0].requestBody).toBe('{"a":1}');
+  });
+
+  it('records a null body for a request that had none', () => {
+    const log = createRequestLog();
+    log.start(call());
+    expect(log.all()[0].requestBody).toBeNull();
+  });
+
   it('settles a successful request', () => {
     const log = createRequestLog();
     const e = log.start(call());

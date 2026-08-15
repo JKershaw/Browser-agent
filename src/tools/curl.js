@@ -433,7 +433,7 @@ function explain(kind, ctx) {
     case CurlError.TIMEOUT:
       return `The request did not complete within the ${ctx.timeoutMs} ms timeout and was aborted. The server may be slow or unreachable; try again or raise the timeout in settings.`;
     case CurlError.CANCELLED:
-      return 'The request was cancelled.';
+      return 'The request was cancelled before it completed. It may or may not have reached the server, so treat its effect as unknown rather than assuming nothing happened.';
     case CurlError.NETWORK:
       return [
         'The browser refused or could not complete the request, and it does not tell pages why.',

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   CurlError,
+  DEFAULT_MAX_BYTES,
+  DEFAULT_TIMEOUT_MS,
   MASK,
   applyCredentials,
   applyProxy,
@@ -544,5 +546,155 @@ describe('formatResultForModel', () => {
     });
     expect(out).not.toContain('sekret-value');
     expect(out).toContain(MASK);
+  });
+});
+
+describe('every error class carries its own explanation, not just a code', () => {
+  // SPEC §9.1 asks for "each error class → its message", and §6.3 makes the
+  // text a first-class requirement: it reaches the user *and* the model. Five
+  // classes previously asserted only `kind`, so their prose could be replaced
+  // with a single character and nothing would notice.
+  const neverCalled = vi.fn();
+  const cases = [
+    {
+      kind: CurlError.INVALID_URL,
+      run: () => executeCurl({ method: 'GET', url: 'not-a-url' }, { fetchImpl: neverCalled }),
+      expect: [/not a valid absolute URL/i, /https:\/\/example\.com/],
+    },
+    {
+      kind: CurlError.BLOCKED_SCHEME,
+      run: () => executeCurl({ method: 'GET', url: 'file:///etc/passwd' }, { fetchImpl: neverCalled }),
+      expect: [/scheme "file:" is not allowed/i, /http:/],
+    },
+    {
+      kind: CurlError.BAD_METHOD,
+      run: () => executeCurl({ method: 'TRACE', url: 'https://a.test' }, { fetchImpl: neverCalled }),
+      expect: [/"TRACE" is not supported/i, /GET, POST/],
+    },
+    {
+      kind: CurlError.BLOCKED_DOMAIN,
+      run: () => executeCurl({ method: 'GET', url: 'https://evil.test/x' }, { fetchImpl: neverCalled, allowlist: ['api.test'] }),
+      expect: [/not on the domain allowlist/i, /api\.test/, /settings/i],
+    },
+    {
+      kind: CurlError.BLOCKED_REDIRECT,
+      run: () => executeCurl({ method: 'GET', url: 'https://api.test/x' }, {
+        fetchImpl: async () => makeResponse({ url: 'https://evil.test/y', redirected: true }),
+        allowlist: ['api.test'],
+      }),
+      expect: [/redirected to "evil\.test"/i, /discarded/i],
+    },
+    {
+      kind: CurlError.CREDENTIAL_REDIRECT,
+      run: () => executeCurl({ method: 'GET', url: 'https://api.test/x', headers: { 'X-K': '{{c}}' } }, {
+        fetchImpl: async () => makeResponse({ url: 'https://evil.test/y', redirected: true }),
+        credentials: [{ name: 'c', value: 'secret-value-here' }],
+      }),
+      expect: [/stored credential/i, /rotate it/i],
+    },
+    {
+      kind: CurlError.BAD_PROXY,
+      run: () => executeCurl({ method: 'GET', url: 'https://a.test' }, { fetchImpl: neverCalled, proxyTemplate: 'not a url {url}' }),
+      expect: [/proxy template/i, /absolute http\(s\) URL/i],
+    },
+    {
+      kind: CurlError.TIMEOUT,
+      run: () => executeCurl({ method: 'GET', url: 'https://a.test' }, {
+        timeoutMs: 10,
+        fetchImpl: (u, init) => new Promise((_r, rej) => {
+          init.signal.addEventListener('abort', () => { const e = new Error('x'); e.name = 'AbortError'; rej(e); });
+        }),
+      }),
+      expect: [/10 ms timeout/, /raise the timeout in settings/i],
+    },
+    {
+      kind: CurlError.NETWORK,
+      run: () => executeCurl({ method: 'GET', url: 'https://a.test' }, {
+        fetchImpl: async () => { throw new TypeError('Failed to fetch'); },
+      }),
+      expect: [/CORS/, /does not tell pages why/i],
+    },
+    {
+      kind: CurlError.READ_FAILED,
+      run: () => {
+        const res = makeResponse({});
+        res.body = { getReader: () => ({ read: async () => { throw new Error('stream broke'); }, cancel: async () => {} }) };
+        return executeCurl({ method: 'GET', url: 'https://a.test' }, { fetchImpl: async () => res });
+      },
+      expect: [/body could not be read/i, /stream broke/],
+    },
+    {
+      kind: CurlError.CANCELLED,
+      run: () => {
+        const c = new AbortController();
+        c.abort();
+        return executeCurl({ method: 'GET', url: 'https://a.test' }, {
+          signal: c.signal,
+          fetchImpl: (u, init) => new Promise((_r, rej) => {
+            if (init.signal.aborted) { const e = new Error('x'); e.name = 'AbortError'; rej(e); }
+          }),
+        });
+      },
+      expect: [/cancelled before it completed/i, /unknown/i],
+    },
+  ];
+
+  it('covers every kind in the CurlError enum', () => {
+    expect(new Set(cases.map((c) => c.kind))).toEqual(new Set(Object.values(CurlError)));
+  });
+
+  it.each(cases.map((c) => [c.kind, c]))('%s explains itself', async (_kind, testCase) => {
+    const r = await testCase.run();
+    expect(r.ok).toBe(false);
+    expect(r.error.kind).toBe(testCase.kind);
+    for (const pattern of testCase.expect) expect(r.error.message).toMatch(pattern);
+    // Never a bare code masquerading as an explanation.
+    expect(r.error.message.length).toBeGreaterThan(30);
+  });
+});
+
+describe('readBodyCapped reports size honestly', () => {
+  it('reports null rather than a number it cannot know when truncated', async () => {
+    const r = await readBodyCapped(makeChunkedResponse(['aaaa', 'bbbb', 'cccc']), 6);
+    expect(r.truncated).toBe(true);
+    // The stream was cancelled, so the real length is genuinely unknown; a
+    // number here would be a lie a caller might display or sum.
+    expect(r.bytes).toBeNull();
+  });
+
+  it('reports the real length when the whole body was read', async () => {
+    expect((await readBodyCapped(makeChunkedResponse(['abc']), 100)).bytes).toBe(3);
+  });
+});
+
+describe('the tool applies its own documented defaults when none are passed', () => {
+  // A direct caller — a script, a future second tool executor — gets SPEC
+  // §6.1's 30s timeout and §5.3's 8 kB cap without having to know them.
+  it('exposes the spec values as literals', () => {
+    expect(DEFAULT_TIMEOUT_MS).toBe(30_000);
+    expect(DEFAULT_MAX_BYTES).toBe(8 * 1024);
+  });
+
+  it('truncates at 8 kB when maxBytes is not supplied', async () => {
+    const r = await executeCurl(GET(), { fetchImpl: async () => makeChunkedResponse(['z'.repeat(20_000)]) });
+    expect(r.truncated).toBe(true);
+    expect(r.body.length).toBe(8 * 1024);
+    expect(r.maxBytes).toBe(8 * 1024);
+  });
+
+  it('uses a 30s timeout when timeoutMs is not supplied', async () => {
+    let seenDelay = null;
+    const realSetTimeout = globalThis.setTimeout;
+    // Capture the timer the request arms rather than waiting 30 seconds.
+    globalThis.setTimeout = (fn, ms, ...rest) => {
+      if (seenDelay === null) seenDelay = ms;
+      return realSetTimeout(fn, ms, ...rest);
+    };
+    try {
+      await executeCurl(GET(), { fetchImpl: async () => makeResponse({}) });
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+    expect(seenDelay).toBe(30_000);
   });
 });

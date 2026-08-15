@@ -13,10 +13,14 @@ export default defineConfig({
       // rendered markup in jsdom would test a simulation, not the artifact.
       exclude: ['src/ui/**', 'src/main.js', 'src/debug.js'],
       thresholds: {
-        statements: 90,
-        branches: 90,
-        functions: 90,
-        lines: 90,
+        // Global *and* per-file. A global-only gate let app.js — the one place
+        // where every setting meets the tool — sit at 48% branch coverage
+        // while passing comfortably behind toolcall.js's 99%.
+        perFile: true,
+        statements: 85,
+        branches: 80,
+        functions: 85,
+        lines: 85,
       },
     },
   },

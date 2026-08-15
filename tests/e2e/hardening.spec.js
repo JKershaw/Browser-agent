@@ -5,6 +5,8 @@
  * @module tests/e2e/hardening.spec
  */
 
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { expect, send, settled, test, toolCall } from './fixtures.js';
 
 test('no WebGPU: an explanatory screen, never a blank page', async ({ page, appServer }) => {
@@ -190,10 +192,23 @@ test('a credential value is masked until revealed', async ({ page, open }) => {
   await expect(page.locator('.cred-value')).not.toContainText('reveal-me-please');
 });
 
-test('the log exports masked JSON', async ({ open, target, page }) => {
-  const page_ = await open([toolCall({ url: `${target.url}/json` }), 'done']);
-  await send(page_, 'fetch it');
-  await page_.locator('.confirm-card').getByRole('button', { name: 'Approve' }).click();
+test('the log exports real JSON with the credential masked out', async ({ open, target, page }) => {
+  const SECRET = 'tok_export_must_not_contain_me';
+  // /headers echoes the request headers straight back, so an unmasked export
+  // would contain the secret twice over: once sent, once reflected.
+  const page_ = await open([
+    toolCall({ url: `${target.url}/headers`, headers: { Authorization: 'Bearer {{Exp}}' } }),
+    'done',
+  ]);
+
+  await page_.locator('#toggle-settings').click();
+  await page_.getByPlaceholder('Name (e.g. GitHub)').fill('Exp');
+  await page_.getByPlaceholder('Secret value').fill(SECRET);
+  await page_.getByRole('button', { name: 'Add credential' }).click();
+  await page_.locator('#close-settings').click();
+
+  await send(page_, 'call it');
+  await page_.locator('.confirm-card .btn-approve').click({ timeout: 5000 });
   await settled(page_);
 
   await page_.locator('#toggle-log').click();
@@ -202,11 +217,37 @@ test('the log exports masked JSON', async ({ open, target, page }) => {
     page_.getByRole('button', { name: 'Export JSON' }).click(),
   ]);
   expect(download.suggestedFilename()).toBe('browser-agent-log.json');
+
+  // Read what was actually written.
+  const stream = await download.createReadStream();
+  const chunks = [];
+  for await (const c of stream) chunks.push(c);
+  const text = Buffer.concat(chunks).toString('utf8');
+
+  const parsed = JSON.parse(text);
+  expect(parsed.entries).toHaveLength(1);
+  expect(parsed.entries[0].url).toContain('/headers');
+  expect(parsed.exportedAt).toBeTruthy();
+  expect(text).not.toContain(SECRET);
+  expect(text).toContain('••••');
 });
 
-test('the file:// notice appears only on a file origin', async ({ open, page }) => {
+test('the file:// notice is hidden over HTTP', async ({ open, page }) => {
   await open(['hi']);
   await expect(page.locator('#file-notice')).toBeHidden();
+});
+
+test('the file:// notice appears when opened straight from disk', async ({ page }) => {
+  // SPEC §2.1's actual requirement: the artifact must work from a file origin
+  // and say so. Asserting only that the notice stays hidden over HTTP left the
+  // positive case — the one the spec is about — untested.
+  const dist = pathToFileURL(join(process.cwd(), 'dist', 'index.html')).href;
+  await page.goto(`${dist}?mockEngine=1`);
+
+  await expect(page.locator('#file-notice')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('#file-notice')).toContainText('file://');
+  // And the app itself still runs, rather than merely warning.
+  await expect(page.locator('#send')).toBeEnabled({ timeout: 20_000 });
 });
 
 test('Escape closes an open sheet', async ({ page, open }) => {

@@ -12,6 +12,32 @@ import {
 
 const store = (storage = createMemoryStorage(), opts = {}) => createSettingsStore({ storage, ...opts });
 
+describe('DEFAULTS', () => {
+  // Deliberately literal. Comparing against DEFAULTS itself would pass for any
+  // value it happened to hold, which is how a mutated "confirm before sending:
+  // false" default slipped past the whole suite.
+  it('matches the values the spec requires, spelled out', () => {
+    expect(DEFAULTS).toEqual({
+      schemaVersion: 1,
+      modelId: '',
+      thinking: false,          // SPEC §4.2: hybrid thinking off by default
+      temperature: 0.6,
+      maxTokens: 1024,
+      maxIterations: 5,         // SPEC §5.3
+      timeoutMs: 30_000,        // SPEC §6.1
+      maxBytes: 8 * 1024,       // SPEC §5.3
+      proxyTemplate: '',        // SPEC §6.2: off by default
+      allowlist: [],            // SPEC §7: off by default
+      confirmBeforeSend: true,  // SPEC §7: ON by default
+      credentials: [],
+    });
+  });
+
+  it('is frozen, so nothing can mutate the defaults at runtime', () => {
+    expect(Object.isFrozen(DEFAULTS)).toBe(true);
+  });
+});
+
 describe('sanitize', () => {
   it('fills every default', () => {
     expect(sanitize({})).toEqual({ ...DEFAULTS, schemaVersion: SCHEMA_VERSION });

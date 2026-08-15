@@ -261,3 +261,197 @@ describe('createApp — mock engine URL flags', () => {
     expect(app.isFileOrigin()).toBe(false);
   });
 });
+
+describe('createApp — every setting actually reaches the tool', () => {
+  /**
+   * These exist because `curl.js` was thoroughly tested in isolation and the
+   * settings store was thoroughly tested in isolation, while the wiring
+   * between them was tested by nothing: disconnecting the CORS proxy entirely,
+   * or dropping the abort signal, left the whole suite green.
+   */
+  const spyApp = (script) => {
+    const fetchImpl = vi.fn(async () => okResponse());
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine({ script }),
+      fetchImpl,
+      confirm: async () => ({ approved: true }),
+    });
+    return { app, fetchImpl };
+  };
+
+  it('routes the request through the configured CORS proxy', async () => {
+    const { app, fetchImpl } = spyApp([toolCall('https://api.test/data'), 'done']);
+    app.settings.set({ confirmBeforeSend: false, proxyTemplate: 'https://proxy.test/?url={url}' });
+    await app.loop.run('go');
+
+    // The URL fetch was actually called with, not the one the model asked for.
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://proxy.test/?url=https%3A%2F%2Fapi.test%2Fdata');
+    expect(app.log.all()[0].proxied).toBe(true);
+  });
+
+  it('sends directly when no proxy is configured', async () => {
+    const { app, fetchImpl } = spyApp([toolCall('https://api.test/data'), 'done']);
+    app.settings.set({ confirmBeforeSend: false });
+    await app.loop.run('go');
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://api.test/data');
+  });
+
+  it('gives the request an abort signal that Stop actually fires', async () => {
+    let seenSignal = null;
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine({ script: [toolCall(), 'done'] }),
+      // Hang the request so the turn can be cancelled while it is in flight —
+      // every other cancellation test cancels at the confirmation card.
+      fetchImpl: (_u, init) => new Promise((_resolve, reject) => {
+        seenSignal = init.signal;
+        init.signal.addEventListener('abort', () => {
+          const e = new Error('aborted');
+          e.name = 'AbortError';
+          reject(e);
+        });
+      }),
+    });
+    app.settings.set({ confirmBeforeSend: false });
+
+    const run = app.loop.run('go');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(seenSignal).toBeInstanceOf(AbortSignal);
+    expect(seenSignal.aborted).toBe(false);
+
+    app.loop.cancel();
+    const result = await run;
+    expect(seenSignal.aborted).toBe(true);
+    expect(result.stopReason).toBe('cancelled');
+  });
+
+  it('applies the configured timeout to the request', async () => {
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine({ script: [toolCall(), 'done'] }),
+      fetchImpl: (_u, init) => new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => {
+          const e = new Error('aborted');
+          e.name = 'AbortError';
+          reject(e);
+        });
+      }),
+    });
+    app.settings.set({ confirmBeforeSend: false, timeoutMs: 1000 });
+    await app.loop.run('go');
+
+    const entry = app.log.all()[0];
+    expect(entry.status).toBe('error');
+    expect(entry.error.kind).toBe('timeout');
+    // The message must quote the limit that was actually configured.
+    expect(entry.error.message).toContain('1000 ms');
+  });
+
+  it('applies the configured response size limit', async () => {
+    const fetchImpl = vi.fn(async () => okResponse('y'.repeat(4000)));
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine({ script: [toolCall(), 'done'] }),
+      fetchImpl,
+    });
+    app.settings.set({ confirmBeforeSend: false, maxBytes: 512 });
+    await app.loop.run('go');
+
+    const entry = app.log.all()[0];
+    expect(entry.response.truncated).toBe(true);
+    expect(entry.response.body.length).toBeLessThanOrEqual(512);
+  });
+
+  it('does not truncate when the limit is generous', async () => {
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine({ script: [toolCall(), 'done'] }),
+      fetchImpl: async () => okResponse('y'.repeat(4000)),
+    });
+    app.settings.set({ confirmBeforeSend: false, maxBytes: 100_000 });
+    await app.loop.run('go');
+    expect(app.log.all()[0].response.truncated).toBe(false);
+  });
+
+  it('passes stored credentials through for substitution', async () => {
+    const { app, fetchImpl } = spyApp([
+      '```json\n' + JSON.stringify({
+        tool: 'curl',
+        args: { method: 'GET', url: 'https://api.test/x', headers: { 'X-Key': '{{K}}' }, body: null },
+      }) + '\n```',
+      'done',
+    ]);
+    app.settings.addCredential({ name: 'K', value: 'the-secret-value' });
+    await app.loop.run('go');
+    expect(fetchImpl.mock.calls[0][1].headers['X-Key']).toBe('the-secret-value');
+  });
+
+  it('reads settings again on each pass, so a mid-turn change takes effect', async () => {
+    const { app, fetchImpl } = spyApp([toolCall(), toolCall(), 'done']);
+    app.settings.set({ confirmBeforeSend: false });
+    let call = 0;
+    const original = app.settings.get.bind(app.settings);
+    // Flip the proxy on between the first and second tool call.
+    app.settings.get = () => {
+      call += 1;
+      return call > 3
+        ? { ...original(), proxyTemplate: 'https://late.proxy/?url={url}' }
+        : original();
+    };
+    await app.loop.run('go');
+    app.settings.get = original;
+
+    const urls = fetchImpl.mock.calls.map((c) => c[0]);
+    expect(urls[0]).toBe('https://api.test/x');
+    expect(urls[1]).toContain('late.proxy');
+  });
+});
+
+describe('createApp — optional wiring', () => {
+  it('works with no hooks and no confirm handler supplied', async () => {
+    // main.js always passes both, but app.js is the headless entry point that
+    // scripts and tests drive directly, so the optional paths must hold up.
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine({ script: [toolCall(), 'done'] }),
+      fetchImpl: async () => okResponse(),
+    });
+    app.settings.set({ confirmBeforeSend: false });
+    const r = await app.loop.run('go');
+    expect(r.stopReason).toBe('text');
+    expect(app.log.all()[0].status).toBe('ok');
+  });
+
+  it('denies safely when confirmation is required but no handler exists', async () => {
+    const fetchImpl = vi.fn();
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine({ script: [toolCall(), 'ok'] }),
+      fetchImpl,
+    });
+    // confirmBeforeSend defaults to true, so this is the out-of-the-box state.
+    await app.loop.run('go');
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(app.log.all()[0].status).toBe('denied');
+  });
+
+  it('falls back to the ambient navigator when none is injected', async () => {
+    const app = createApp({ storage: createMemoryStorage(), engine: createMockEngine() });
+    const { caps } = await app.probe();
+    // Node has no navigator.gpu, so this exercises the real global path.
+    expect(caps.webgpu).toBe(false);
+    expect(typeof caps.reason).toBe('string');
+  });
+
+  it('uses the ambient fetch when none is injected', async () => {
+    const app = createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine({ script: [toolCall('https://127.0.0.1:1/nope'), 'failed'] }),
+    });
+    app.settings.set({ confirmBeforeSend: false });
+    await app.loop.run('go');
+    // Nothing listens on port 1; the point is that a real fetch was reached.
+    expect(app.log.all()[0].status).toBe('error');
+  });
+});

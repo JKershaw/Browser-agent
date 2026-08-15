@@ -44,18 +44,25 @@ function makeLoop({ script = ['done'], settings = {}, confirm, executeTool, hook
 }
 
 describe('clampIterations', () => {
+  // Literal expectations. Using DEFAULT_MAX_ITERATIONS/HARD_MAX_ITERATIONS as
+  // the expected values would make the table pass for any value they held.
+  it('pins the limits the spec names', () => {
+    expect(DEFAULT_MAX_ITERATIONS).toBe(5);
+    expect(HARD_MAX_ITERATIONS).toBe(10);
+  });
+
   it.each([
     [1, 1],
     [5, 5],
     [10, 10],
-    [11, HARD_MAX_ITERATIONS],
-    [999, HARD_MAX_ITERATIONS],
+    [11, 10],
+    [999, 10],
     [0, 1],
     [-3, 1],
     ['4', 4],
-    ['abc', DEFAULT_MAX_ITERATIONS],
-    [undefined, DEFAULT_MAX_ITERATIONS],
-    [NaN, DEFAULT_MAX_ITERATIONS],
+    ['abc', 5],
+    [undefined, 5],
+    [NaN, 5],
     [3.9, 3],
   ])('clampIterations(%s) === %s', (input, expected) => {
     expect(clampIterations(input)).toBe(expected);
@@ -308,14 +315,18 @@ describe('agent loop — confirmation and denial', () => {
     expect(loop.getState().pendingConfirmation).toBeNull();
   });
 
-  it('tolerates a confirm handler returning undefined', async () => {
-    const { loop, exec } = makeLoop({
-      script: [toolCall(), 'ok'],
+  it('treats a confirm handler returning undefined as a denial, not a crash', async () => {
+    const { loop, exec, engine } = makeLoop({
+      script: [toolCall(), 'I will not send that.'],
       settings: { confirmBeforeSend: true },
       confirm: async () => undefined,
     });
-    await loop.run('go');
+    const r = await loop.run('go');
     expect(exec).not.toHaveBeenCalled();
+    // The turn must complete normally and the model must be told it was denied
+    // — an exception here would end the turn as tool_error instead.
+    expect(r.stopReason).toBe(StopReason.TEXT);
+    expect(engine.calls[1].messages.at(-1).content).toContain('DENIED BY USER');
   });
 
   it('remembers the full origin, scheme and port included', async () => {
@@ -329,6 +340,27 @@ describe('agent loop — confirmation and denial', () => {
     await loop.run('go');
     expect([...session.autoApprovedHosts]).toEqual(['https://api.test']);
   });
+
+  it('a plain Approve does not silently auto-approve the host', async () => {
+    // "Approve" and "auto-approve this domain" are two distinct choices
+    // (SPEC §7). Collapsing them would mean one approval quietly authorising
+    // every later request to that host for the session.
+    const confirm = vi.fn(async () => ({ approved: true }));
+    const { loop, exec } = makeLoop({
+      script: [toolCall(), toolCall(), 'done'],
+      settings: { confirmBeforeSend: true },
+      confirm,
+    });
+    await loop.run('go');
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(exec).toHaveBeenCalledTimes(2);
+    expect(loop.getState().autoApprovedHosts).toEqual([]);
+  });
+
+  // The "URL that cannot be parsed" branch of the remember path is covered
+  // directly by originOf() in security.test.js; the loop only ever sees calls
+  // the parser has already validated, so there is no honest way to drive it
+  // from here without a fake that proves nothing.
 });
 
 describe('agent loop — malformed tool calls', () => {
@@ -498,5 +530,51 @@ describe('agent loop — observability', () => {
     loop.reset();
     expect(loop.transcript).toHaveLength(0);
     expect(loop.getState().autoApprovedHosts).toEqual([]);
+  });
+});
+
+describe('agent loop — the model is told names, never values', () => {
+  it('passes credential names only into the system prompt', async () => {
+    const { loop, engine } = makeLoop({
+      script: ['ok'],
+      settings: {
+        credentials: [
+          { name: 'GitHub', value: 'ghp_this_must_never_appear' },
+          { name: 'Weather', value: 'wk_also_never' },
+        ],
+      },
+    });
+    await loop.run('go');
+    const sys = engine.calls[0].messages[0].content;
+    expect(sys).toContain('{{GitHub}}');
+    expect(sys).toContain('{{Weather}}');
+    expect(sys).not.toContain('ghp_this_must_never_appear');
+    expect(sys).not.toContain('wk_also_never');
+  });
+
+  it('reports an accurate live iteration number on each tool call', async () => {
+    // SPEC §8.3's live counter: the stats bar reads this directly.
+    const seen = [];
+    const { loop } = makeLoop({
+      script: [toolCall(), toolCall(), toolCall(), 'done'],
+      hooks: { onToolCall: ({ iteration }) => seen.push(iteration) },
+    });
+    await loop.run('go');
+    expect(seen).toEqual([1, 2, 3]);
+  });
+
+  it('stops after a tool call that completed while the turn was cancelled', async () => {
+    // Cancelling during the request must not let the loop carry on with the
+    // result and start another iteration.
+    let cancelDuring = null;
+    const exec = vi.fn(async () => {
+      cancelDuring?.();
+      return okResult();
+    });
+    const { loop } = makeLoop({ script: [toolCall(), toolCall(), 'done'], executeTool: exec });
+    cancelDuring = () => loop.cancel();
+    const r = await loop.run('go');
+    expect(r.stopReason).toBe(StopReason.CANCELLED);
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 });

@@ -410,3 +410,52 @@ is exercised where it actually matters.
   (97.9% statements, 92.4% branches overall).
 - Every mutation the reviewer proved survivable was re-run against the new
   suite. All now fail the build.
+
+
+---
+
+## Final state
+
+All four milestones from SPEC §11 are built, reviewed and verified.
+
+| | |
+|---|---|
+| Unit tests | 474, per-file coverage gate green (97.9% statements, 92.4% branches) |
+| End-to-end | 43 Playwright scenarios, desktop 1280px and Pixel 7, against the built artifact |
+| Build | one self-contained `dist/index.html`, 6.1 MB (2.2 MB gzipped) |
+| CI | unit suite gates the build; the single-file property is asserted, not assumed |
+
+### What the reviews cost and bought
+
+Four adversarial rounds found **44 real defects** across security, correctness,
+spec compliance, UI and the test suite itself. Not one was caught by the tests
+passing at the time. The pattern is worth recording:
+
+- **The bugs clustered at the seams**, not inside modules. Credential scoping
+  was enforced on one code path and not its twin; the proxy setting was
+  well-tested and so was the proxy code, but not the wiring between them;
+  `curl.js` masked bodies and not headers. Every module was individually
+  defensible.
+- **The security decision point attracted the worst of them.** The confirmation
+  card auto-focused Approve so the reflex second Enter dispatched a `DELETE`;
+  it masked the `{{placeholder}}` the user needed to see while showing the
+  literal token it should have hidden; it named the target host while the data
+  went to a proxy; and a long sub-domain pushed the real domain off-screen.
+- **A test suite is not evidence until something has tried to break it.** 474
+  tests and a 90% gate coexisted with a tautology that made the spec's headline
+  security default unassertable, and with `app.js` — where every setting meets
+  the tool — at 48% branch coverage.
+
+### Not verified
+
+Two things are written, wired and unrun, because this machine has no GPU:
+
+- **`npm run test:e2e:real`** — the real-model suite against Qwen3-0.6B. It
+  skips with an explicit reason rather than passing vacuously, distinguishing
+  "no WebGPU adapter" from "cannot reach the model CDN".
+- **`node scripts/model-check.js`** — SPEC §11.1's tool-call reliability
+  comparison across the three tiers. The unsubstantiated "best tool-calling
+  reliability" claim has been removed from the tier table until someone runs it.
+
+Everything green above was run against the built single-file artifact, not the
+dev server.

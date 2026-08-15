@@ -211,12 +211,23 @@ sees and the log the user reads. Nothing collapses into "request failed".
 | `bad_method` | Method outside the whitelist | The allowed methods. |
 | `bad_proxy` | Proxy template yields an invalid URL | The template, **redacted** — it often carries the user's proxy key. |
 | `timeout` | `AbortController` fired | The configured limit, and where to change it. |
+| `mixed_content` | Secure page, plain `http://` target | That the browser blocks it before sending, whatever the server allows, and that only an *HTTPS* proxy helps. |
 | `cancelled` | User pressed Stop | Nothing more. |
 | `network` | `fetch` threw | That the browser hides the reason; that CORS is the usual cause; whether a proxy is configured; what else it could be. |
 | `read_failed` | Body stream broke mid-read | The underlying message. |
 
 HTTP error statuses are **not** in this table. A 404 or 500 is data: it reaches
 the model with its status and body, and the model decides what to do.
+
+`mixed_content` is the one failure the browser hides that we can nonetheless
+identify with certainty, so it is checked *before* dispatch and surfaced on the
+confirmation card as well as in the result. Left to `fetch`, it arrives as the
+same opaque `TypeError` a CORS failure gives — and blaming CORS there is worse
+than saying nothing, because the target may be perfectly CORS-enabled and the
+suggested fix (a proxy) only works if the proxy is itself HTTPS. Localhost and
+other potentially-trustworthy origins are exempt, exactly as browsers exempt
+them, so pointing the agent at a local dev server still works from the hosted
+site.
 
 ## Threat model
 

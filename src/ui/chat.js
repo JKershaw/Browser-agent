@@ -9,7 +9,7 @@
  * @module ui/chat
  */
 
-import { MASK, maskHeaders, maskSecrets, previewHeaders } from '../tools/curl.js';
+import { MASK, isMixedContent, maskHeaders, maskSecrets, previewHeaders } from '../tools/curl.js';
 import { clear, disclosure, el, formatMs, prettyJson } from './dom.js';
 
 /**
@@ -288,6 +288,11 @@ export function createChatPane(root) {
           // the opposite of where the data actually goes.
           credentialUse.proxyHost
             ? el('p', { class: 'confirm-cred', text: `Sent via your configured proxy ${credentialUse.proxyHost}, not directly to ${host}. That proxy sees the full URL and every header${credentialUse.used?.length ? ', including the credentials above' : ''}.` })
+            : null,
+          // Knowable before dispatch, so say so here rather than letting the
+          // user approve something the browser will refuse to send.
+          isMixedContent(url) && !credentialUse.proxyHost
+            ? el('p', { class: 'confirm-warn', text: 'This will be blocked: a page served over HTTPS cannot make plain http:// requests. Approving it will produce an error, not a response.' })
             : null,
           credentialUse.blocked?.length
             ? el('p', { class: 'muted', text: `Not sent (scoped to other hosts): ${credentialUse.blocked.join(', ')}.` })

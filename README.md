@@ -189,8 +189,9 @@ npm run test:e2e       # Playwright, against the built dist/index.html
 npm run test:e2e:real  # the same, driving the real Qwen3-0.6B model
 ```
 
-`npm run test:e2e` builds nothing itself — run `npm run build` first. It starts
-its own local servers and needs no network.
+Both e2e commands rebuild `dist/index.html` first, because they test the built
+artifact rather than the dev server. They start their own local servers, so
+`test:e2e` needs no network at all.
 
 `test:e2e:real` needs a working WebGPU device and downloads ~0.4 GB. It is
 excluded from CI for that reason.

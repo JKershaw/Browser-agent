@@ -11,7 +11,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "pretest:e2e": "npm run build",
     "test:e2e": "playwright test",
+    "pretest:e2e:real": "npm run build",
     "test:e2e:real": "REAL_MODEL=1 playwright test tests/e2e/real-model.spec.js",
     "serve:dist": "node scripts/serve-dist.js"
   },

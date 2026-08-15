@@ -35,6 +35,13 @@ test('the loading card names the phase, the bytes and the time left', async ({ p
   // An estimate, once there is enough evidence for one.
   await expect(card.locator('.loading-timing')).toContainText(/left/, { timeout: 20_000 });
   await expect(card.locator('.loading-timing')).toContainText(/so far/);
+
+  // The first-run reassurance stays visible for the whole download. It used
+  // to be written into the timing line, where the first progress snapshot
+  // overwrote it within milliseconds of the load starting. On a machine
+  // whose real quota is short, the storage pre-flight replaces it with the
+  // headroom warning — which is the note line working, not failing.
+  await expect(card.locator('.loading-note')).toContainText(/downloads once|Carrying on for now/);
 });
 
 test('the elapsed time ticks along between the engine’s reports', async ({ page, appServer }) => {
@@ -101,6 +108,32 @@ test('the card gives way to a working app when the load finishes', async ({ page
   await expect(page.locator('.loading-card')).toHaveCount(0, { timeout: 20_000 });
   await expect(page.locator('#send')).toBeEnabled();
   await expect(page.locator('#messages')).toContainText('is ready');
+});
+
+test('a cached model skips the download and says the load is short', async ({ page, appServer }) => {
+  // `?mockCached=1` makes the mock report the model as already stored, the
+  // way a second visit finds it. The card must promise seconds rather than
+  // minutes, and the download phase must never appear.
+  await openLoading(page, appServer, { mockCached: '1', mockLoadMs: '3000' });
+
+  const card = page.locator('.loading-card');
+  await expect(card).toBeVisible();
+  await expect(card.locator('.loading-note')).toContainText('Already downloaded');
+
+  const phases = new Set();
+  while (await card.count()) {
+    const phase = await card.locator('.loading-phase').textContent().catch(() => null);
+    if (phase) phases.add(phase);
+    await page.waitForTimeout(100);
+  }
+  expect([...phases]).not.toContain('Downloading the model');
+  expect([...phases]).toContain('Loading the model onto the GPU');
+
+  // And the settings sheet reports the cache, in the picker and the hint.
+  await expect(page.locator('#send')).toBeEnabled({ timeout: 20_000 });
+  await page.locator('#toggle-settings').click();
+  await expect(page.locator('select option[selected]')).toContainText('cached');
+  await expect(page.locator('#settings-body')).toContainText('Cached in this browser — loads in seconds.');
 });
 
 test('a storage failure is explained and evidenced, not just reported', async ({ page, appServer }) => {

@@ -656,6 +656,18 @@ describe('a long deceptive host is displayed tail-first', () => {
   it.each(['api.test', 'a.b.example', 'localhost'])('leaves the short host %s whole', (host) => {
     expect(splitHostForDisplay(host)).toEqual({ head: '', tail: host });
   });
+
+  it.each(['127.0.0.1', '127.0.0.1:8080', '192.168.10.20:3000', '[::1]:8080', '[2001:db8::1]'])(
+    'leaves the IP address %s whole — an IP has no registrable domain to emphasise',
+    (host) => {
+      expect(splitHostForDisplay(host)).toEqual({ head: '', tail: host });
+    }
+  );
+
+  it('still splits a DNS name that merely starts with digits', () => {
+    // 4-label DNS names must keep the tail emphasis even when digit-heavy.
+    expect(splitHostForDisplay('123.api.evil.example')).toEqual({ head: '123', tail: 'api.evil.example' });
+  });
 });
 
 describe('the proxy host shown on the card', () => {

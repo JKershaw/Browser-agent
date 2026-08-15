@@ -102,6 +102,24 @@ test('long unbroken content wraps instead of stretching the layout', async ({ op
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
+test('Enter on a touch keyboard inserts a newline instead of sending', async ({ open, page }) => {
+  // On a phone there is no Shift key to reach a newline with, so Enter must
+  // not be hijacked for Send. The Pixel 7 profile reports a coarse pointer,
+  // which is the signal the composer keys off.
+  await open(['hi']);
+
+  await page.locator('#input').fill('line one');
+  await page.locator('#input').press('Enter');
+
+  // Nothing was sent, and the newline really landed in the draft.
+  await expect(page.locator('.msg-user')).toHaveCount(0);
+  await expect(page.locator('#input')).toHaveValue('line one\n');
+
+  // The Send button is still how a message goes out.
+  await page.locator('#send').click();
+  await expect(page.locator('.msg-user')).toHaveCount(1);
+});
+
 test('a small-memory phone is offered the small model with a reason', async ({ page, appServer }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'deviceMemory', { get: () => 4, configurable: true });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createApp, isFileOrigin, mockLoadFailureFromUrl, reportablePageUrl, wantsMockEngine } from '../../src/app.js';
+import { createApp, isFileOrigin, mockLoadFailureFromUrl, reportablePageUrl, wantsMockCached, wantsMockEngine } from '../../src/app.js';
 import { createMemoryStorage } from '../../src/state/settings.js';
 import { createMockEngine } from '../../src/llm/mock.js';
 
@@ -48,6 +48,16 @@ describe('wantsMockEngine', () => {
     ['', false],
   ])('%s -> %s', (search, expected) => {
     expect(wantsMockEngine(search)).toBe(expected);
+  });
+});
+
+describe('wantsMockCached', () => {
+  it.each([
+    ['?mockEngine=1&mockCached=1', true],
+    ['?mockCached=0', false],
+    ['', false],
+  ])('%s -> %s', (search, expected) => {
+    expect(wantsMockCached(search)).toBe(expected);
   });
 });
 

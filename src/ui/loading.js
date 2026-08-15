@@ -76,8 +76,12 @@ export function createLoadingPanel(host) {
       this.destroy();
       card = build(info.modelId);
       host.append(card);
+      // The note line, not the timing line: `update()` rewrites the timing on
+      // every snapshot, so a message put there is overwritten within
+      // milliseconds of the load starting — visible to nobody.
+      refs.note.hidden = false;
       setText(
-        refs.timing,
+        refs.note,
         info.cached
           ? 'Already downloaded — this should take seconds.'
           : 'The model downloads once and is then cached, so only this first run is slow.'

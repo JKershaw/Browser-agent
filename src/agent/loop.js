@@ -258,7 +258,6 @@ export function createAgentLoop(deps) {
         }
         if (controller.signal.aborted) return finish(StopReason.CANCELLED);
 
-        globalThis.__log=(globalThis.__log||[]);globalThis.__log.push(JSON.stringify(decision));
         if (!decision.approved) {
           // A refusal costs no iteration: the user denying three suggestions
           // must not silently exhaust a budget meant for requests that were
@@ -358,7 +357,7 @@ export function createAgentLoop(deps) {
       setState({ pendingConfirmation: null });
     }
 
-    const approved = decision === undefined ? true : Boolean(decision && decision.approved);
+    const approved = Boolean(decision && decision.approved);
     if (approved && decision.rememberHost) {
       try {
         session.autoApprovedHosts.add(new URL(call.args.url).hostname.toLowerCase());

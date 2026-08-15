@@ -13,6 +13,8 @@ import {
   describeCredentialUse,
   executeCurl,
   formatResultForModel,
+  isMixedContent,
+  isPotentiallyTrustworthy,
   maskHeaders,
   maskSecrets,
   previewHeaders,
@@ -670,5 +672,76 @@ describe('the proxy host shown on the card', () => {
     // Falls back to the leading token rather than showing nothing, because a
     // card that names no proxy at all is the failure mode being fixed.
     expect(proxyHostFor('p.example/?apikey=k&url={url}')).toBe('p.example');
+  });
+});
+
+describe('a secure page cannot make plain http requests, and says so', () => {
+  // Only reproducible once deployed: GitHub Pages serves over HTTPS, and the
+  // browser then blocks http:// targets before the request leaves. `fetch`
+  // rejects with the same opaque TypeError a CORS failure gives, so the app
+  // used to blame CORS and recommend a proxy — advice that does not help, on a
+  // target that may be perfectly CORS-enabled.
+  const onHttps = { fetchImpl: vi.fn(), pageProtocol: 'https:' };
+
+  it('refuses before dispatch and explains the real cause', async () => {
+    const r = await executeCurl({ method: 'GET', url: 'http://api.example.com/data' }, onHttps);
+    expect(r.ok).toBe(false);
+    expect(r.error.kind).toBe('mixed_content');
+    expect(r.error.message).toMatch(/served over HTTPS/);
+    expect(r.error.message).toMatch(/api\.example\.com/);
+    // And it must not repeat the misleading CORS advice.
+    expect(r.error.message).not.toMatch(/Access-Control-Allow-Origin/);
+    expect(onHttps.fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('points at the fix that actually works', async () => {
+    const r = await executeCurl({ method: 'GET', url: 'http://api.example.com/data' }, onHttps);
+    // An http:// proxy is blocked in exactly the same way, so saying "use a
+    // proxy" without qualification would send the user in a circle.
+    expect(r.error.message).toMatch(/HTTPS CORS proxy/);
+    expect(r.error.message).toMatch(/http:\/\/ proxy would be blocked/);
+  });
+
+  it('allows https targets from a secure page', async () => {
+    const r = await executeCurl({ method: 'GET', url: 'https://api.example.com/data' }, {
+      fetchImpl: async () => res(),
+      pageProtocol: 'https:',
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it('allows http targets from an insecure page', async () => {
+    const r = await executeCurl({ method: 'GET', url: 'http://api.example.com/data' }, {
+      fetchImpl: async () => res(),
+      pageProtocol: 'http:',
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it.each([
+    'http://localhost:8080/api',
+    'http://127.0.0.1:3000/api',
+    'http://127.0.0.53/api',
+    'http://dev.localhost/api',
+    'http://[::1]:9000/api',
+  ])('still allows the trustworthy origin %s from HTTPS', async (url) => {
+    // Browsers exempt these from mixed-content blocking. Refusing them would
+    // break the common "point the agent at my local dev server" case.
+    const r = await executeCurl({ method: 'GET', url }, { fetchImpl: async () => res(), pageProtocol: 'https:' });
+    expect(r.ok).toBe(true);
+  });
+
+  it('classifies origins the way the browser does', () => {
+    const trustworthy = (u) => isPotentiallyTrustworthy(new URL(u));
+    expect(trustworthy('https://anything.example')).toBe(true);
+    expect(trustworthy('http://localhost')).toBe(true);
+    expect(trustworthy('http://127.0.0.1:1234')).toBe(true);
+    expect(trustworthy('http://api.example.com')).toBe(false);
+    expect(trustworthy('http://192.168.1.10')).toBe(false);
+  });
+
+  it('is inert outside a browser, where there is no page protocol', () => {
+    expect(isMixedContent('http://api.example.com', undefined)).toBe(false);
+    expect(isMixedContent('not a url', 'https:')).toBe(false);
   });
 });

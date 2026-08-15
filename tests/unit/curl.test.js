@@ -608,6 +608,14 @@ describe('every error class carries its own explanation, not just a code', () =>
       expect: [/10 ms timeout/, /raise the timeout in settings/i],
     },
     {
+      kind: CurlError.MIXED_CONTENT,
+      run: () => executeCurl({ method: 'GET', url: 'http://api.example.com/x' }, {
+        fetchImpl: neverCalled,
+        pageProtocol: 'https:',
+      }),
+      expect: [/served over HTTPS/, /api\.example\.com/, /HTTPS CORS proxy/],
+    },
+    {
       kind: CurlError.NETWORK,
       run: () => executeCurl({ method: 'GET', url: 'https://a.test' }, {
         fetchImpl: async () => { throw new TypeError('Failed to fetch'); },

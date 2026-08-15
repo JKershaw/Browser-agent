@@ -35,8 +35,9 @@ and how to turn it on in your browser — never a blank page.
 ## Deploy it yourself in two minutes
 
 1. **Fork this repository.**
-2. **Settings → Pages → Source: GitHub Actions.** The included workflow builds
-   and publishes on every push to `main`.
+2. **Push anything to `main`** (or run the "Deploy to GitHub Pages" workflow by
+   hand). It runs the tests, builds the single file, enables Pages for you and
+   publishes. There is nothing to configure in repository settings.
 3. **Open the URL it gives you** — `https://<your-user>.github.io/Browser-agent/`.
    It works the same on a phone.
 
@@ -122,6 +123,18 @@ rather than guessing: a failed request explains that CORS is the usual cause,
 says whether a proxy is configured, and lists the other possibilities.
 
 APIs that send `Access-Control-Allow-Origin` work directly, with no setup.
+
+### One thing to know about the hosted version
+
+The hosted app is served over **HTTPS**, and browsers refuse to let a secure
+page make plain `http://` requests at all — the request is blocked before it
+leaves, whatever the target server allows. The app detects this and says so on
+the confirmation card, rather than reporting it as a CORS failure.
+
+Use the target's `https://` address if it has one. If you must reach an
+`http://` host, an **HTTPS** proxy works (an `http://` one would be blocked the
+same way), or run the app locally over `http://`. Requests to `localhost` are
+exempt, so pointing the agent at your own dev server works from the hosted site.
 
 For anything else you need a CORS proxy. **None is bundled** — a proxy sees every
 request you send through it, so which one to trust is your call, not ours. Set
@@ -215,6 +228,9 @@ reliability across the three model tiers. It needs a GPU.
   rather than pretending.
 - **No conversation persistence.** Reload and you start fresh. The request log
   is in-memory only, by design.
+- **Plain `http://` targets do not work from the hosted site.** That is the
+  browser's mixed-content rule, not a choice this app makes; see
+  [CORS and proxies](#cors-and-proxies).
 
 ---
 

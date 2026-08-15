@@ -27,6 +27,7 @@ export const CurlError = Object.freeze({
   BAD_PROXY: 'bad_proxy',
   TIMEOUT: 'timeout',
   CANCELLED: 'cancelled',
+  MIXED_CONTENT: 'mixed_content',
   NETWORK: 'network',
   READ_FAILED: 'read_failed',
 });
@@ -198,6 +199,54 @@ export function attachHostCredentials(headers, host, credentials = []) {
     used.push(cred.name);
   }
   return { headers: out, used, secrets };
+}
+
+/**
+ * Is this URL a "potentially trustworthy" origin in the W3C sense?
+ *
+ * Browsers exempt these from mixed-content blocking, so a secure page *can*
+ * reach `http://localhost`. Getting this wrong in either direction would be
+ * worse than not checking: refusing a request the browser would have allowed,
+ * or promising one it will block.
+ *
+ * @param {URL} url
+ * @returns {boolean}
+ */
+export function isPotentiallyTrustworthy(url) {
+  if (url.protocol === 'https:' || url.protocol === 'wss:') return true;
+  const host = url.hostname.toLowerCase();
+  return (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host === '127.0.0.1' ||
+    host.startsWith('127.') ||
+    host === '[::1]' ||
+    host === '::1'
+  );
+}
+
+/**
+ * Would the browser block this request as mixed content?
+ *
+ * A secure page cannot fetch plain `http://`, and when it refuses, `fetch`
+ * rejects with the same opaque TypeError a CORS failure produces. Blaming CORS
+ * there is actively misleading: the target may be perfectly CORS-enabled, and
+ * the suggested fix — a proxy — only helps if the proxy itself is HTTPS.
+ *
+ * This is knowable before dispatch, so it is worth knowing.
+ *
+ * @param {URL|string} target
+ * @param {string} [pageProtocol] Defaults to the current page's protocol.
+ * @returns {boolean}
+ */
+export function isMixedContent(target, pageProtocol = globalThis.location?.protocol) {
+  if (pageProtocol !== 'https:') return false;
+  try {
+    const url = typeof target === 'string' ? new URL(target) : target;
+    return !isPotentiallyTrustworthy(url);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -434,6 +483,8 @@ function explain(kind, ctx) {
       return `The request did not complete within the ${ctx.timeoutMs} ms timeout and was aborted. The server may be slow or unreachable; try again or raise the timeout in settings.`;
     case CurlError.CANCELLED:
       return 'The request was cancelled before it completed. It may or may not have reached the server, so treat its effect as unknown rather than assuming nothing happened.';
+    case CurlError.MIXED_CONTENT:
+      return `This page is served over HTTPS, and browsers refuse to let a secure page make plain http:// requests — the request is blocked before it is sent, whatever the target server allows. Use the https:// address of ${ctx.host} if it has one, or route the request through an HTTPS CORS proxy (an http:// proxy would be blocked in exactly the same way). Running this app over http:// locally also lifts the restriction.`;
     case CurlError.NETWORK:
       return [
         'The browser refused or could not complete the request, and it does not tell pages why.',
@@ -496,6 +547,8 @@ function failure(kind, ctx, elapsedMs, meta = {}) {
  * @param {Array<object>} [opts.credentials]
  * @param {AbortSignal} [opts.signal] External cancellation (user pressed stop).
  * @param {() => number} [opts.now] Injectable clock for deterministic tests.
+ * @param {string} [opts.pageProtocol] The page's own protocol, for the
+ *   mixed-content check. Defaults to the real one.
  * @returns {Promise<object>} Result object; `ok` distinguishes success.
  */
 export async function executeCurl(args, opts = {}) {
@@ -508,6 +561,7 @@ export async function executeCurl(args, opts = {}) {
     credentials = [],
     signal,
     now = () => Date.now(),
+    pageProtocol = globalThis.location?.protocol,
   } = opts;
 
   const started = now();
@@ -531,6 +585,15 @@ export async function executeCurl(args, opts = {}) {
   }
 
   const host = target.hostname.toLowerCase();
+
+  // Checked before the allowlist so the more specific, more actionable
+  // explanation wins when both would apply.
+  if (isMixedContent(target, pageProtocol)) {
+    return failure(CurlError.MIXED_CONTENT, { host }, elapsed(), {
+      request: { method, url: target.href },
+    });
+  }
+
   const list = (allowlist || []).map((s) => String(s).trim()).filter(Boolean);
   if (!isHostAllowed(host, list)) {
     return failure(CurlError.BLOCKED_DOMAIN, { host, allowlist: list }, elapsed(), {

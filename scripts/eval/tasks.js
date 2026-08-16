@@ -135,6 +135,18 @@ export function wikiTasks() {
         answer: /brunel/i,
       },
       {
+        // A control, not a product scenario: nobody types a REST URL. It
+        // isolates one question — given the right endpoint, can the model read
+        // the answer out of the JSON? — from the question of whether it can
+        // find the endpoint at all. Supplying endpoints is only worth building
+        // if the answer here is yes.
+        id: 'wiki-given-api-url',
+        ask: 'Use the curl tool to GET https://en.wikipedia.org/api/rest_v1/page/summary/Telephone and then tell me who is credited with inventing the telephone.',
+        expectTool: true,
+        expect: { host, pathIncludes: 'summary/telephone' },
+        answer: /bell/i,
+      },
+      {
         id: 'wiki-no-tool',
         ask: 'Without using any tool, tell me: what is the chemical symbol for gold?',
         expectTool: false,

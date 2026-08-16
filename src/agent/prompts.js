@@ -45,6 +45,13 @@ export function buildSystemPrompt(opts = {}) {
     `You may make at most ${maxIterations} tool calls for one user message. When you have what you need, stop calling the tool and reply in plain prose. Never show the user raw JSON tool calls as your final answer.`,
     '',
     'If a call fails, the result explains why. Report the failure honestly to the user rather than pretending the request worked or inventing data.',
+    '',
+    // The defining constraint of running in a page, and until now the model was
+    // never told about it. Measured on Qwen3-0.6B: asked to look something up
+    // on Wikipedia, it reached for the article URL every time, which browsers
+    // refuse to fetch cross-origin — 0 out of 20.
+    'You are in a web page, so requests are subject to CORS. Ordinary web pages meant for humans (HTML) almost always refuse cross-origin requests and are too large to read; JSON APIs almost always permit them and are small. Prefer a site’s JSON API over its HTML pages.',
+    'If a request fails with a network error, the same URL will fail again. Do not retry it — reach for that site’s API instead.',
   ];
 
   if (credentialNames.length > 0) {

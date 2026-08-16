@@ -34,6 +34,15 @@ describe('buildSystemPrompt', () => {
     expect(base()).toMatch(/rather than pretending the request worked or inventing data/);
   });
 
+  it('warns that HTML pages are unreachable and APIs are not', () => {
+    // Not decoration: without this the 0.6B model reached for the article URL
+    // on every Wikipedia lookup, which the browser refuses cross-origin.
+    const p = buildSystemPrompt();
+    expect(p).toMatch(/CORS/);
+    expect(p).toMatch(/JSON API/i);
+    expect(p).toMatch(/do not retry it/i);
+  });
+
   it('explains the TOOL RESULT marker it will receive', () => {
     expect(base()).toContain('TOOL RESULT');
   });

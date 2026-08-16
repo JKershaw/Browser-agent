@@ -158,6 +158,22 @@ export function localTasks(base) {
         expectTool: false,
         answer: /bristol/i,
       },
+      {
+        // Fan-out baseline (capability ladder rung 6), hermetic half: two
+        // independent GETs in one ask, no "then" anywhere, so the splitter
+        // leaves it whole and the number is the model's unaided rate. The
+        // answer needs "Bristol", which is not in the question, so parroting
+        // the ask cannot pass; `expectEach` requires both requests, so
+        // answering from one fetch lands in wrong_target.
+        id: 'fanout-local-two-gets',
+        ask: `Use the curl tool to GET ${base}/json and also GET ${base}/status/202, and tell me both the city and the status code you got.`,
+        expectTool: true,
+        expectEach: [
+          { host, method: 'GET', pathIncludes: '/json' },
+          { host, method: 'GET', pathIncludes: '/status/202' },
+        ],
+        answer: /bristol[\s\S]*202|202[\s\S]*bristol/i,
+      },
     ],
     holdout: [
       // `local-headers` and `local-query` below were spent: a fix was measured
@@ -348,6 +364,29 @@ export function wikiTasks() {
         ask: 'Without using any tool, tell me: what is the chemical symbol for gold?',
         expectTool: false,
         answer: /\bau\b/i,
+      },
+      {
+        // Fan-out baseline (capability ladder rung 6), real-lookup half: two
+        // articles, one comparison, no "then" so the splitter leaves it whole.
+        // Both summaries state the years hand-checked at authoring time —
+        // Clifton "opened in 1864", Tower Bridge "built between 1886 and 1894"
+        // — because the pair this task nearly used (Golden Gate) has *no* year
+        // in its summary and would have rebuilt the wiki-telephone trap. The
+        // oracle points at Clifton, whose summary contains the graded answer.
+        //
+        // One honest caveat: the question names both bridges, so an answer can
+        // match /clifton/i by parroting the ask. `expectEach` means it only
+        // does so after both real fetches — read transcripts before believing
+        // a pass says the *comparison* happened.
+        id: 'fanout-wiki-bridges',
+        ask: 'Look up the Wikipedia articles "Clifton Suspension Bridge" and "Tower Bridge" and tell me which of the two opened first.',
+        expectTool: true,
+        expectEach: [
+          { host, pathIncludes: 'clifton' },
+          { host, pathIncludes: 'tower' },
+        ],
+        answer: /clifton/i,
+        oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Clifton_Suspension_Bridge',
       },
     ],
     holdout: [

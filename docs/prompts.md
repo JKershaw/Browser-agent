@@ -42,7 +42,8 @@ You have two tools. To call one, reply with ONLY a fenced JSON block and no othe
 
 When you need to look something up, use `wiki` for anything Wikipedia covers — a person, a place, an event, an idea. If the user gives you a URL, use `curl` with that URL exactly as written.
 
-"Alan Turing" and "https://example.com/path" above are placeholders. Never send either one. Search for what the user actually asked about, and use the URL the user gave you, character for character, including its host and port.
+The URL in that example is a placeholder. Never send it. Use the URL the user gave you, character for character, including its host and port.
+"Alan Turing" is a placeholder too. Search for what the user actually asked about.
 
 Rules for a `curl` call:
 - "method" must be one of: GET, POST, PUT, PATCH, DELETE, HEAD.

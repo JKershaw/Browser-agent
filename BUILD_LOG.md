@@ -805,3 +805,81 @@ gets exactly one of them right — the one a search tool would ask for on its ow
 Hints fire on `NETWORK` failures only. The `www` case returns HTTP 500, which is
 a successful round-trip, so those samples were given no hint at all — which is
 why they repeated too.
+
+## A second tool, and what describing it cost
+
+The failure distribution from the previous section decided this. Across eleven
+failures the article title was right eleven times and the URL around it wrong in
+ten. A URL asks the model for scheme, host, path shape and title at once; a
+search term asks for the one part it never gets wrong. So `tools/wiki.js` takes
+a term and does the rest itself — search resolves it to a real title, the title
+fetches the summary — through `executeCurl`, so the allowlist, timeout, byte cap
+and redirect checks all still apply, and both hops are logged.
+
+It worked, and then two sentences I wrote about it undid more than it gained.
+
+| | curl only | with wiki, first prompt | after two one-line fixes |
+|---|---|---|---|
+| `wiki` dev suite | — | 108/140 (77%) | **137/140 (98%)** |
+| `local` dev suite | 100% | 91/120 (76%) | **120/120 (100%)** |
+| `wiki-turing-open` | 75% | 100% | 100% |
+| `wiki-turing-fact` | 70% | 90% | 95% |
+| `wiki-no-tool` | 100% | **0%** | 100% |
+| `local-no-tool` | 100% | **0%** | 100% |
+| `local-get-json-after-3-turns` | 100% | **65%** | 100% |
+
+Pooled over the two tasks where the model chooses its own URL: **29/40 → 39/40,
+z = 3.1**, and the intervals do not overlap.
+
+### The two sentences
+
+**"Use `wiki` whenever the answer would be on Wikipedia."** That is
+unconditionally true of nearly any question. Asked for the chemical symbol for
+gold and told to use no tool, the model searched Wikipedia in twenty samples out
+of twenty — and answered "Au" correctly every time. Restraint went from 100% to
+0% on *both* suites, and the model was obeying the instruction exactly as
+written. Making it conditional — "when you need to look something up" — restored
+it. The closing "the tool is optional" line was also pluralised: with two tools,
+the singular read as naming curl alone, exempting the easier tool from the only
+line that grants restraint.
+
+**Merging two placeholder warnings into one sentence.** The original — "The URL
+in that example is a placeholder. Never send it." — became "…and…above are
+placeholders. Never send either one." `local-get-json-after-3-turns` fell to 65%,
+sending `https://example.com/path` in five samples out of twenty: the exact bug
+the original wording exists to prevent, and visible only after three turns of
+conversation. Splitting it back into two short sentences recovered all of it.
+
+### The finding
+
+**Adding the tool cost nothing. Describing it cost everything.** Three curl
+tasks held at 100% throughout, tool selection never went wrong, and the parser
+handled two tools without complaint. Every regression came from prompt wording.
+
+That reframes what a tool costs. The marginal price of the *second* tool was not
+its schema or its code; it was that every tool adds prompt surface, and prompt
+surface is where this model size breaks. It is an argument for the narrowest
+possible interface per tool, and against assuming that a tool which measures
+well in isolation is free in combination.
+
+### And the instrument, again
+
+`verdict` compared confidence intervals for overlap. For two proportions that is
+about p < 0.005 — far stricter than the 95% the intervals are drawn at — and it
+called 15/20 → 20/20 "inconclusive" on the very task a user had reported. It is
+a two-proportion z-test now, with non-overlap kept as the stronger `emphatic`
+flag. The harness exists to stop us believing noise, not to stop us believing
+evidence.
+
+Also fixed: `wiki-turing-recover`'s answer regex wanted "computer scientist" and
+the model wrote "father of theoretical computer science", which the article also
+says. Seven correct answers were scored wrong. That is the third grader in this
+project to mismark a faithful answer, so the rule is now explicit — enumerate
+what the source supports by reading the source, never by reading the failures.
+
+### Still open
+
+`wiki-turing-recover` sits at 90% against a baseline of 100% (z = -1.45, not
+significant). Both failures are the model retrying the URL it was handed rather
+than switching tools. That is the repeat-loop from the previous section, still
+unaddressed, and the next thing worth fixing.

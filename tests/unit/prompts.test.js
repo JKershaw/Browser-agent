@@ -51,7 +51,8 @@ describe('buildSystemPrompt', () => {
     // substitution. The wiki example is a person's name rather than an
     // obvious template, which makes it likelier to be copied, not less.
     const p = buildSystemPrompt();
-    expect(p).toMatch(/placeholders\. Never send either one/);
+    expect(p).toMatch(/placeholder\. Never send it/);
+    expect(p).toMatch(/"Alan Turing" is a placeholder too/);
     expect(p).toMatch(/character for character/);
     expect(p).toMatch(/Search for what the user actually asked about/);
   });

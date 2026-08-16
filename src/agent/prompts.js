@@ -57,7 +57,15 @@ export function buildSystemPrompt(opts = {}) {
     // "Article_Title" was requested literally. An example is something a small
     // model copies, so every placeholder here needs the rule stated — including
     // the new one, which is a person's name and looks nothing like a template.
-    '"Alan Turing" and "https://example.com/path" above are placeholders. Never send either one. Search for what the user actually asked about, and use the URL the user gave you, character for character, including its host and port.',
+    // Two short sentences, not one long one. Merging both warnings into a
+    // single sentence measured worse: `local-get-json-after-3-turns` went to
+    // 65%, sending https://example.com/path in five samples out of twenty —
+    // the exact bug the original wording was written to stop. The first
+    // sentence below is restored verbatim because it is the version that
+    // measured 95%+; the wiki placeholder gets its own line rather than
+    // sharing one.
+    'The URL in that example is a placeholder. Never send it. Use the URL the user gave you, character for character, including its host and port.',
+    '"Alan Turing" is a placeholder too. Search for what the user actually asked about.',
     '',
     'Rules for a `curl` call:',
     `- "method" must be one of: ${ALLOWED_METHODS.join(', ')}.`,

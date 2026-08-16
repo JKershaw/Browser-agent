@@ -448,6 +448,32 @@ the sheets into a permanent side rail. Colours are tokens redefined under
   needs a GPU. Task sets are split `dev`/`holdout` so a prompt cannot be tuned
   until the tasks in front of it pass without that showing up.
 
+  Three properties exist because of specific mistakes, and are worth keeping:
+
+  - **Every sample is stored**, so `--regrade` re-scores a saved run against the
+    current task definitions with no GPU. Four graders here have mismarked
+    correct behaviour, all four by imagining a phrasing the model then declined
+    to use, and each fix used to cost minutes of GPU time to re-earn samples we
+    already had. `--show-failures` prints what the model actually wrote, which
+    is how every one of those bugs was found.
+  - **Results record their provenance** — git SHA, dirty flag, and a hash of the
+    system prompt. Prompt text moves these numbers more than anything else, so
+    "did the prompt differ between these two files?" should be a comparison
+    rather than a recollection.
+  - **`--dist` serves a build from anywhere**, so measuring a change against its
+    predecessor means building an old ref beside your work rather than checking
+    files out over the top of it.
+
+  A change counts as real when a two-proportion z-test says so. The earlier rule
+  — non-overlapping confidence intervals — is roughly p < 0.005 and rejected
+  effects that were plainly real; it survives as the stronger `emphatic` flag.
+
+- **Prompt documentation is generated, not written.** `docs/prompts.md` mirrors
+  `buildSystemPrompt()` verbatim, `npm run docs:prompts` regenerates it, and a
+  unit test fails if they diverge. Maintained by hand it drifted within a single
+  session, at one point describing a hint format the code had already stopped
+  producing.
+
 The e2e suite scripts the model via `?mockEngine=1&mockScript=[…]`, with
 `mockLoadMs`, `mockLoadFail` and `mockCached` to hold, fail or shortcut the
 simulated load. That flag

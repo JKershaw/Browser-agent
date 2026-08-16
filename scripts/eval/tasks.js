@@ -107,6 +107,44 @@ export function localTasks(base) {
       },
     ],
     holdout: [
+      // `local-headers` and `local-query` below were spent: a fix was measured
+      // on them, so they have been dev tasks in all but name ever since. These
+      // four are fresh and have never been iterated against. Without them there
+      // is no unfitted evidence at all, and every rate in BUILD_LOG comes from
+      // tasks that were tuned until they passed.
+      {
+        id: 'local-put-echo',
+        ask: `Use the curl tool to PUT the JSON {"colour":"red"} to ${base}/echo, then tell me which method the server said it received.`,
+        expectTool: true,
+        expect: { host, method: 'PUT', pathIncludes: '/echo' },
+        answer: /put/i,
+      },
+      {
+        id: 'local-status-429',
+        ask: `Use the curl tool to fetch ${base}/status/429 and tell me the HTTP status code it returned.`,
+        expectTool: true,
+        expect: { host, method: 'GET', pathIncludes: '/status/429' },
+        allowHttpError: true,
+        answer: /429/,
+      },
+      {
+        // Same URL as the most-practised dev task, different field. Reading the
+        // right value out of a response it has seen twenty times is a different
+        // skill from fetching it.
+        id: 'local-json-other-field',
+        ask: `Use the curl tool to GET ${base}/json and tell me the value of "temperatureC".`,
+        expectTool: true,
+        expect: { host, method: 'GET', pathIncludes: '/json' },
+        answer: /\b14\b/,
+      },
+      {
+        // Restraint has now broken twice, both times as a side effect of
+        // changing text about calling tools. It needs a holdout of its own.
+        id: 'local-no-tool-arithmetic',
+        ask: 'What is 12 multiplied by 8? Answer from your own knowledge — do not use any tool.',
+        expectTool: false,
+        answer: /\b96\b/,
+      },
       {
         id: 'local-headers',
         ask: `Use the curl tool to GET ${base}/headers and tell me the value of the "host" header the server received.`,
@@ -244,6 +282,23 @@ export function wikiTasks() {
       },
     ],
     holdout: [
+      {
+        // Lower-case and loosely phrased, the way a person types. The search hop
+        // is supposed to absorb exactly this, and nothing has tested that it
+        // does on a term the tool was not built against.
+        id: 'wiki-eiffel',
+        ask: 'look up the eiffel tower on wikipedia and tell me which city it is in',
+        expectTool: true,
+        expect: { pathIncludes: 'eiffel' },
+        answer: /paris/i,
+        oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Eiffel_Tower',
+      },
+      {
+        id: 'wiki-no-tool-arithmetic',
+        ask: 'Without using any tool, tell me: how many sides does a hexagon have?',
+        expectTool: false,
+        answer: /\b(six|6)\b/i,
+      },
       {
         id: 'wiki-bristol',
         ask: 'Look up the Wikipedia article "Bristol" and tell me which river the city stands on.',

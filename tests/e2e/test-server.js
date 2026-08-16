@@ -151,10 +151,10 @@ export async function startTargetServer(port = 0) {
  * @param {number} [port]
  * @returns {Promise<{url: string, port: number, close: () => Promise<void>}>}
  */
-export async function startStaticServer(port = 0) {
+export async function startStaticServer(port = 0, distDir = DIST) {
   const server = createServer(async (req, res) => {
     try {
-      const html = await readFile(join(DIST, 'index.html'));
+      const html = await readFile(join(distDir, 'index.html'));
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);
     } catch (e) {

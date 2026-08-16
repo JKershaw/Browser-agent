@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { END, START, replaceMirror } from '../../scripts/sync-prompt-docs.js';
 import { buildSystemPrompt, capMessage, denialMessage, repeatedCallMessage, toolResultMessage } from '../../src/agent/prompts.js';
 
 /**
@@ -119,6 +121,26 @@ describe('buildSystemPrompt', () => {
     const p = buildSystemPrompt({ credentialNames: ['GitHub'] });
     expect(p).toContain('{{GitHub}}');
     expect(p).not.toContain('ghp_');
+  });
+});
+
+describe('docs/prompts.md', () => {
+  it('mirrors the built prompt verbatim', () => {
+    // The doc claims to be verbatim, and a mirror maintained by hand drifts:
+    // it once carried a stale hint example (`Article_Title`) describing
+    // behaviour the code had already stopped producing. Run
+    // `npm run docs:prompts` to fix a failure here.
+    const doc = readFileSync(new URL('../../docs/prompts.md', import.meta.url), 'utf8');
+    expect(doc).toContain(buildSystemPrompt());
+  });
+
+  it('has the anchors the sync script needs', () => {
+    // A rename that broke these would make the sync script throw rather than
+    // silently write a doc with the prompt missing — but better to fail here.
+    const doc = readFileSync(new URL('../../docs/prompts.md', import.meta.url), 'utf8');
+    expect(doc).toContain(START);
+    expect(doc).toContain(END);
+    expect(replaceMirror(doc, 'REPLACED')).toContain('REPLACED');
   });
 });
 

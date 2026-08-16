@@ -231,6 +231,16 @@ artifact rather than the dev server. They start their own local servers, so
 `test:e2e:real` needs a working WebGPU device and downloads ~0.4 GB. It is
 excluded from CI for that reason.
 
+Two things about it are worth knowing before you run it:
+
+- **It opens a real browser window.** Headless Chromium exposes only a software
+  adapter, and that adapter has no `shader-f16` — which every `q4f16_1` build in
+  the catalogue needs — so a headless run cannot succeed. If your machine is an
+  exception, `REAL_MODEL_HEADLESS=1` opts back in.
+- **It serves the app on a fixed port** (43117), because the browser partitions
+  the weight cache by origin. On a random port every run is a cold start that
+  re-downloads the model and orphans the copy before it.
+
 There is also `node scripts/model-check.js`, which compares tool-call
 reliability across the three model tiers. It needs a GPU.
 

@@ -362,7 +362,14 @@ the sheets into a permanent side rail. Colours are tokens redefined under
   is the tool's target and keeps a receipt log, so assertions can prove a
   request really arrived. Two device profiles: desktop 1280px and Pixel 7.
 - **Real-model e2e** (`npm run test:e2e:real`) drives the actual Qwen3-0.6B
-  through WebLLM. Excluded from CI: it needs a working WebGPU device.
+  through WebLLM. Excluded from CI: it needs a working WebGPU device, and a
+  *real* one — headless Chromium's software adapter lacks `shader-f16`, so the
+  suite runs headed and its capability probe checks for the feature rather than
+  for the API. It pins the model by seeding `localStorage` before the page
+  boots, because `probe()` honours a persisted `modelId`; loading a model
+  behind the UI's back would leave the composer disabled and let boot download
+  a second, larger tier at the same time. The app is served on a fixed port so
+  the origin — and therefore the weight cache — survives between runs.
 
 The e2e suite scripts the model via `?mockEngine=1&mockScript=[…]`, with
 `mockLoadMs`, `mockLoadFail` and `mockCached` to hold, fail or shortcut the

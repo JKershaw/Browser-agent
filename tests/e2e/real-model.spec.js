@@ -19,11 +19,20 @@
 import { chromium, expect, test } from '@playwright/test';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { STORAGE_KEY as SETTINGS_KEY } from '../../src/state/settings.js';
 import { startStaticServer, startTargetServer } from './test-server.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROFILE = join(HERE, '..', '..', '.playwright-profile');
 const MODEL = 'Qwen3-0.6B-q4f16_1-MLC';
+
+/**
+ * A *fixed* port for the app, which the rest of the suite does not need and
+ * this one cannot do without. Weight caches are partitioned by origin, so an
+ * ephemeral port gives every run a new origin and a cold cache — the persistent
+ * profile then re-downloads 0.4 GB each time and orphans the previous copy.
+ */
+const APP_PORT = 43117;
 
 // Loading weights dominates: generous once, not per-assertion.
 test.describe.configure({ mode: 'serial', timeout: 15 * 60_000 });
@@ -43,18 +52,47 @@ let unavailable = null;
 // suite reports a clean, explained skip rather than a raw "Failed to fetch"
 // from somewhere inside WebLLM.
 test.beforeEach(() => {
-  test.skip(hasGpu === false, 'No WebGPU adapter here; run this on a machine with a GPU.');
+  test.skip(
+    hasGpu === false,
+    'No WebGPU adapter with shader-f16 here; run this on a machine with a real GPU.'
+  );
   test.skip(Boolean(unavailable), unavailable || '');
 });
 
 test.beforeAll(async () => {
-  app = await startStaticServer();
+  // `describe.configure({timeout})` governs tests, not hooks, and this hook is
+  // where the 0.4 GB download happens — without this it runs under the config's
+  // 60 s and a cold cache never finishes.
+  test.setTimeout(15 * 60_000);
+
+  app = await startStaticServer(APP_PORT);
   target = await startTargetServer();
 
+  // Headed by default: headless Chromium falls back to SwiftShader, whose
+  // adapter has no `shader-f16` — every q4f16_1 model in the catalog needs it,
+  // so a headless run can only ever fail deep inside WebLLM. Set
+  // `REAL_MODEL_HEADLESS=1` on a box whose headless browser has a real adapter.
   context = await chromium.launchPersistentContext(PROFILE, {
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined,
+    headless: Boolean(process.env.REAL_MODEL_HEADLESS),
     args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan'],
   });
+  // Pin the tiny tier *before* any page script runs. `app.probe()` honours a
+  // persisted modelId, so this makes the app's own boot load the model we want
+  // — the only path that marks the model loaded and enables the composer.
+  // Setting it after navigation is too late twice over: boot has already
+  // started downloading whatever tier this device would pick by default (2.5 GB
+  // on a desktop GPU), and a bare `engine.load()` leaves the UI none the wiser.
+  await context.addInitScript(
+    ([key, modelId]) => {
+      localStorage.setItem(
+        key,
+        JSON.stringify({ modelId, confirmBeforeSend: true, maxIterations: 3 })
+      );
+    },
+    [SETTINGS_KEY, MODEL]
+  );
+
   page = await context.newPage();
   page.on('console', (m) => {
     if (m.type() === 'error') console.log(`[page error] ${m.text()}`);
@@ -63,36 +101,46 @@ test.beforeAll(async () => {
   await page.goto(app.url);
 
   // A present navigator.gpu is not enough — a headless or virtualised GPU
-  // exposes the API and then refuses to grant an adapter.
+  // exposes the API and then refuses to grant an adapter. Nor is an adapter
+  // enough: a software adapter grants one and then lacks `shader-f16`, which
+  // the q4f16_1 weights need, so require the feature rather than the API.
   hasGpu = await page.evaluate(async () => {
     if (!navigator.gpu) return false;
     try {
-      return Boolean(await navigator.gpu.requestAdapter());
+      const adapter = await navigator.gpu.requestAdapter();
+      return Boolean(adapter?.features.has('shader-f16'));
     } catch {
       return false;
     }
   });
   if (!hasGpu) return;
 
-  // Load the tiny tier explicitly rather than whatever the device would pick.
-  try {
-    await page.evaluate(async (id) => {
-      window.__agent.settings.set({ modelId: id, confirmBeforeSend: true, maxIterations: 3 });
-      await window.__agent.engine.load(id, (p) => {
-        window.__progress = p;
-      });
-    }, MODEL);
-  } catch (e) {
-    const message = String(e?.message || e);
+  // Boot is now downloading the weights. Wait for whichever comes first: a
+  // composer that has come alive, or the card turning into a failure report.
+  const outcome = await page
+    .waitForFunction(
+      () => {
+        if (document.querySelector('.loading-card-failed')) return 'failed';
+        const send = document.querySelector('#send');
+        return send && !send.disabled ? 'ready' : false;
+      },
+      null,
+      { timeout: 14 * 60_000 }
+    )
+    .then((handle) => handle.jsonValue());
+
+  if (outcome === 'failed') {
+    const report = (await page.locator('.loading-card-failed').innerText()).replace(/\s+/g, ' ');
     // A blocked or offline CDN is an environment problem, not a product bug,
-    // and must not masquerade as either a pass or a mysterious failure.
-    if (/Failed to fetch|NetworkError|ERR_|fetch failed/i.test(message)) {
+    // and must not masquerade as either a pass or a mysterious failure. Any
+    // other diagnosis is the app telling us something true, so let it fail.
+    if (/connection|network|offline|could not be downloaded/i.test(report)) {
       unavailable =
-        `Could not download ${MODEL} weights from the model CDN (${message.slice(0, 120)}). ` +
+        `Could not download ${MODEL} weights from the model CDN (${report.slice(0, 160)}). ` +
         'This suite needs outbound access to huggingface.co from the browser.';
       return;
     }
-    throw e;
+    throw new Error(`The model failed to load:\n${report}`);
   }
 
   await expect(page.locator('#send')).toBeEnabled();

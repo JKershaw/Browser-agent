@@ -39,7 +39,13 @@ const app = createApp({
         // settleStream, not dropStream: a partial answer from a previous turn
         // is history and must not be deleted when the next message is sent.
         chat.settleStream();
-        chat.addUserMessage(m.content);
+        // A split multi-step ask reaches the transcript one step at a time,
+        // but the user typed one message: show their text once, as typed,
+        // then mark each later step as the agent moving through the plan.
+        const step = m.meta?.step;
+        if (!step) chat.addUserMessage(m.content);
+        else if (step.index === 0) chat.addUserMessage(step.original);
+        else chat.addStepMessage(m.content, step.index + 1, step.total);
         return;
       }
       if (m.role === 'assistant') {

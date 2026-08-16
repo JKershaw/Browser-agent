@@ -75,6 +75,22 @@ export function createChatPane(root) {
     },
 
     /**
+     * A step of a split multi-step ask (agent/split.js). Rendered as the
+     * agent narrating its way through the user's plan, not as a user bubble —
+     * the user did not type this line on its own.
+     *
+     * @param {string} text The step being started.
+     * @param {number} n 1-based step number.
+     * @param {number} total Steps in the plan.
+     */
+    addStepMessage(text, n, total) {
+      return add(el('div', { class: 'msg msg-step' }, [
+        el('div', { class: 'msg-tag', text: `step ${n} of ${total}` }),
+        el('div', { class: 'msg-body', text }),
+      ]));
+    },
+
+    /**
      * Begin (or restart) the streaming assistant bubble.
      * @param {{repair?: boolean}} [opts]
      */

@@ -90,6 +90,18 @@ export function buildSystemPrompt(opts = {}) {
     'The user must approve each request before it is sent, and may deny it. A denial is a real answer from the user, not an error to retry blindly.'
   );
 
+  // Last, deliberately. Everything above this point is about making calls, and
+  // a 0.6B model that had read all of it answered "none of the provided tools
+  // can be used to answer the question" when asked for the capital of France —
+  // 100% before the tool guidance grew, 50% after. Stated near the top it
+  // changed nothing (50% -> 55%, intervals overlapping). The NEXT STEP line had
+  // already shown that for this model the end of a message is worth more than
+  // the middle of one.
+  lines.push(
+    '',
+    'The tool is optional. If you already know the answer, or the user asks you not to use the tool, answer in plain prose — that is a complete and correct response, not a failure.'
+  );
+
   if (!thinking) {
     lines.push('', 'Answer directly. Do not emit reasoning or <think> blocks.');
   }

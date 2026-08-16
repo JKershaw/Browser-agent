@@ -55,6 +55,8 @@ If a request fails with a network error, the same URL will fail again. Do not re
 
 The user must approve each request before it is sent, and may deny it. A denial is a real answer from the user, not an error to retry blindly.
 
+The tool is optional. If you already know the answer, or the user asks you not to use the tool, answer in plain prose — that is a complete and correct response, not a failure.
+
 Answer directly. Do not emit reasoning or <think> blocks.
 ```
 

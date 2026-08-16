@@ -641,3 +641,119 @@ explanation rather than that there was exactly one.
   and non-zero throughput stats.
 - The origin fix, measured: 9.4 minutes cold, 2.2 minutes warm, on runs that
   before it were 4.7 minutes *every* time.
+
+---
+
+## Post-release: measuring the model instead of guessing at it
+
+Two runs of the same commit disagreed about whether the model builds the right
+request. That is not a flaky test, it is a badly posed question: a 0.6B model at
+temperature 0.6 is a distribution, and one sample is a draw from it. "Does the
+tool contract hold" has to be answered as a rate.
+
+`scripts/model-check.js` could not answer it either. It scores a sample on
+`iterations > 0` and never looks at the request the model built, so a
+well-formed, schema-valid call to the wrong host counts as a first-try success —
+which is exactly the failure that had been observed.
+
+### The instrument
+
+`scripts/tool-eval.js` grades the request that was actually built and the answer
+actually given, in eight buckets, and reports a rate with a Wilson interval.
+Overlapping intervals are called inconclusive, which is a stricter bar than a
+significance test and the right one when every accepted change ships in a
+prompt. Task sets are split `dev`/`holdout`. The grading rules are pure and
+unit-tested; only the driving needs a GPU.
+
+**It was wrong twice before it was right, both times in the model's favour.**
+
+- `wiki-telephone` asked who invented the telephone and pointed at the
+  "Telephone" article, whose summary never mentions Bell. Twenty correct fetches
+  scored as twenty wrong answers.
+- `wiki-clifton` asked which engineer designed the bridge. The source says
+  Barlow and Hawkshaw, "based on an earlier design by Brunel"; the model
+  answered Barlow and Hawkshaw and was marked wrong six times out of six.
+
+Hence `oracleUrl` and `scripts/eval/verify-tasks.js`, which fetches each task's
+source and prints the sentence the expected answer sits in. Presence is not
+sufficiency, and no automated check can decide that — but a human reading one
+sentence can.
+
+### What it found
+
+**Handing it a URL is not the problem.** Given one, the model reproduces it,
+fetches it, reads the JSON and answers: 100% across the hermetic tasks, and 20
+out of 20 on a Wikipedia REST endpoint.
+
+**Finding a URL was.** Asked to look something up on Wikipedia, Qwen3-0.6B
+fetched the article page — which browsers refuse cross-origin — 0 out of 20.
+Qwen3-1.7B did the same, 0 out of 20, more consistently. Three times the
+parameters, identical failure: not a capability gap, a missing fact.
+
+Four changes, each measured:
+
+| Change | Effect |
+|---|---|
+| Tell it CORS blocks HTML, prefer JSON APIs | 0% → 0%. Failure moved: it stopped fetching articles and started inventing endpoints |
+| Supply the endpoint in the failure message | 0% → 0%. It reported the failure instead — obeying "report the failure honestly", which was the only instruction on the subject |
+| Lead with the remedy; say to act on it first | 5% → 15%. Intervals overlapped: inconclusive |
+| End the message with `NEXT STEP: call the tool again with exactly this URL: <url>` | **0% → 90%** |
+
+The last one is the finding. It can copy a URL out of the user's message at
+~100%; it could not find one inside a paragraph of English in a tool result.
+What was missing was not a better sentence but an instruction, as a value rather
+than as prose, in the position the model attends to — the same reason "Do not
+claim it succeeded." was put last and works.
+
+The first version of that hint said "…/page/summary/Article_Title", and the
+model requested `Article_Title`, literally. A placeholder in front of a small
+model is something to copy.
+
+### What the holdout found
+
+`local-query` — "fetch {base}/status/503", never used while iterating — scored
+5%. In 17 samples out of 20 the model sent `https://example.com/status/503`:
+the URL from our own schema example. The dev set contained only "GET
+{base}/status/404", which scores 100%; one word of phrasing separated a
+perfect task from a broken one, and only the holdout could see it.
+
+That is the same substitution that produced the first failure the real-model
+suite ever showed. The lesson had been learned earlier in the same session and
+applied to the hint text, and never applied to the prompt that taught it. One
+sentence — *the URL in that example is a placeholder, never send it* — took it
+from 5% to 95%.
+
+### What the regression check found
+
+Everything above is about making tool calls, and it showed. Asked "what is the
+capital of France? Do not use any tool", the model began answering "none of the
+provided tools can be used to answer the question" — 100% → 50%. Nothing in the
+prompt had ever said the tool was optional, and once enough of the prompt was
+about calling it, a plain answer stopped looking like a legal move.
+
+Stating the other half of the contract near the top of the prompt did not fix
+it: 50% → 55%, intervals overlapping, which is the harness's word for nothing
+happened. Moving the same sentence to the end of the prompt fixed it
+completely: **55% → 100%**. Identical words, different position.
+
+That is the third time in this section that position beat content, after the
+`NEXT STEP` line and the hint that was ignored as prose in the middle of a
+message. For a model this size, where an instruction sits appears to matter more
+than how it is phrased — which is worth knowing before writing the next one.
+
+### And one ablation that changed the conclusion
+
+The CORS paragraph measured 0% → 0% when it was added, and was kept on
+reasoning rather than evidence. Removing it once `NEXT STEP` existed:
+
+| | with the paragraph | without |
+|---|---|---|
+| `wiki-telephone` | 70% | 35% |
+| `wiki-clifton` | 100% | 35% |
+
+Worthless alone, load-bearing in combination. Neither the decision to keep it
+nor the decision to drop it could have been made from the first measurement,
+and both would have been made confidently.
+
+Three of the five defects in this section were found by measurement rather than
+by reading, and two of them were in the measuring instrument.

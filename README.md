@@ -146,6 +146,14 @@ says whether a proxy is configured, and lists the other possibilities.
 
 APIs that send `Access-Control-Allow-Origin` work directly, with no setup.
 
+For a few sites whose pages are unreachable but whose APIs are not — Wikipedia,
+Wikidata, GitHub — a failed request comes back naming the URL that *would* have
+worked, for the article or repository you actually asked about. The agent then
+retries with it. So "look up the Clifton Suspension Bridge on Wikipedia" works:
+the first request fails in the open, on a card you can see, and the second one
+succeeds. That list is deliberately short and always will be — every entry is
+verified, and a wrong hint would be worse than none.
+
 ### One thing to know about the hosted version
 
 The hosted app is served over **HTTPS**, and browsers refuse to let a secure
@@ -319,7 +327,11 @@ site's data and reload.
 - **One tool.** HTTP requests, nothing else.
 - **Small models make mistakes.** They occasionally produce a malformed tool
   call — the app asks them to correct it once, then shows you the raw output
-  rather than pretending.
+  rather than pretending. Measured on the tiny tier (Qwen3-0.6B, 20 samples per
+  task): it builds the request you asked for ~100% of the time, and completes a
+  Wikipedia lookup — find the endpoint, read the JSON, answer — 65–95% of the
+  time depending on the question. `npm run eval` is how those numbers are
+  produced, and re-produced after any prompt change.
 - **No conversation persistence.** Reload and you start fresh. The request log
   is in-memory only, by design.
 - **Plain `http://` targets do not work from the hosted site.** That is the

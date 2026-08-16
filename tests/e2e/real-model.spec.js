@@ -204,7 +204,11 @@ test('tool round-trip: the model builds a real request and reads the response', 
 
   const card = page.locator('.confirm-card');
   await expect(card).toBeVisible({ timeout: 120_000 });
-  await expect(card).toContainText('127.0.0.1');
+  // The whole target origin, not just "127.0.0.1": the app is served from
+  // 127.0.0.1 too, so the loose assertion passes for a request to this page's
+  // own origin — which then never reaches the target server, and the failure
+  // surfaces later as "0 requests received", naming nothing.
+  await expect(card).toContainText(`${target.url}/json`);
   await settleTurn('Approve');
 
   // Strict: the request really happened, and the log recorded it.

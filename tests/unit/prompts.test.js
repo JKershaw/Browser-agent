@@ -34,6 +34,14 @@ describe('buildSystemPrompt', () => {
     expect(base()).toMatch(/rather than pretending the request worked or inventing data/);
   });
 
+  it('says the tool is optional, so a plain answer is not a failure', () => {
+    // Without this the model answered "none of the provided tools can be used
+    // to answer the question" when asked for the capital of France.
+    const p = buildSystemPrompt();
+    expect(p).toMatch(/tool is optional/i);
+    expect(p).toMatch(/plain prose/);
+  });
+
   it('forbids sending the example URL, which models copy', () => {
     // 17 samples out of 20 sent https://example.com/... instead of the URL
     // they were given, and the first real-model e2e failure was the same

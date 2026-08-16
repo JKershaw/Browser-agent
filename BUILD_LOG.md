@@ -1108,3 +1108,36 @@ truncation, silent for distinct requests and post-failure retries, forgets
 between turns) and the message's shape pinned in prompts.test.js. The repeat
 messages — this one and the loop breaker's — are now documented in
 `docs/prompts.md`, which had never mentioned the older of the two.
+
+## Does any of this hold on 1.7B? Mostly — and where it breaks is instructive
+
+Every fix this cycle was tuned on Qwen3-0.6B; "the changes are model-agnostic"
+was an assertion. Qwen3-1.7B's pre-fix baseline was 0/40 on the wiki lookup
+tasks — every sample fetched the CORS-blocked `/wiki/` article URL — with
+restraint at 100%. Re-run on today's main, n=20 per task:
+
+- **wiki dev: 140/140 = 100%, clean.** From zero. The wiki tool, the hint
+  recovery path (`wiki-turing-recover` forces the dead URL and it recovered
+  every time) and restraint all carry to the larger model unchanged.
+- **local dev: 161/180 = 89%** — *worse* than 0.6B's 178/180 on the same
+  suite, and the buckets say exactly where:
+  - `local-unreachable` 50%: after the transport failure, 1.7B re-emits the
+    identical dead call until the pass bound ends the turn (`stopReason: cap`,
+    10/10 failures). The loop breaker correctly refuses each repeat, and the
+    `NEXT STEP: … tell the user you could not fetch it` imperative that 0.6B
+    obeys 100% is simply ignored. Position-beats-content is a 0.6B lesson;
+    1.7B argues with the transcript instead.
+  - `local-get-json-after-3-turns` 70%, `local-post-body` 85%: a new failure
+    shape 0.6B never produced — the model *fabricates* a `TOOL RESULT {...}`
+    block in its own voice instead of calling the tool, complete with an
+    invented response (`{"city": "London"}` — wrong city). It has learned the
+    transcript's format well enough to counterfeit it. One sample also copied
+    `https://example.com/` from the schema example — the placeholder lesson is
+    not 0.6B-specific.
+
+Verdict: the *tools* generalise up; the *turn discipline* does not — bigger
+models fail by confabulation where the small one fails by repetition. Nothing
+is being fixed for 1.7B now (0.6B is the product target and 1.7B was never the
+tuning target); the numbers are recorded so the next model-size conversation
+starts from measurement instead of vibes. Runs saved as `wiki-1.7b-after.json`
+and `local-1.7b-after.json` with provenance.

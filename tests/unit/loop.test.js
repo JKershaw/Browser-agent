@@ -363,6 +363,129 @@ describe('agent loop — confirmation and denial', () => {
   // from here without a fake that proves nothing.
 });
 
+describe('agent loop — repeating a request that already failed', () => {
+  const failed = (retryUrl) => ({
+    ok: false,
+    error: { kind: 'network', message: 'The browser refused it.', ...(retryUrl ? { retryUrl } : {}) },
+    elapsedMs: 1,
+  });
+
+  it('does not send the same failing request twice', async () => {
+    // Six of eleven failures in one measured run were an identical URL re-sent
+    // until the iteration cap, and the reported bug from a real user was the
+    // same URL sent twice with a third under way.
+    const exec = vi.fn(async () => failed());
+    const { loop } = makeLoop({
+      script: [toolCall('https://blocked.test/page'), toolCall('https://blocked.test/page'), 'giving up'],
+      executeTool: exec,
+    });
+
+    const r = await loop.run('fetch it');
+
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(r.stopReason).toBe(StopReason.TEXT);
+    const notSent = r.transcript.filter((m) => m.role === 'tool' && m.content.includes('NOT SENT'));
+    expect(notSent).toHaveLength(1);
+  });
+
+  it('names the working URL in the refusal when there is one', async () => {
+    const exec = vi.fn(async () => failed('https://en.wikipedia.org/api/rest_v1/page/summary/Alan_Turing'));
+    const { loop } = makeLoop({
+      script: [toolCall('https://wikipedia.org/wiki/Alan_Turing'), toolCall('https://wikipedia.org/wiki/Alan_Turing'), 'ok'],
+      executeTool: exec,
+    });
+
+    const r = await loop.run('look it up');
+    const message = r.transcript.find((m) => m.role === 'tool' && m.content.includes('NOT SENT'));
+    // Last line and imperative, like every other remedy in this project.
+    expect(message.content.trim().split('\n').pop()).toBe(
+      'NEXT STEP: call the tool again with exactly this URL: https://en.wikipedia.org/api/rest_v1/page/summary/Alan_Turing'
+    );
+  });
+
+  it('still lets a different URL through after one fails', async () => {
+    const exec = vi.fn(async (call) =>
+      call.args.url.includes('blocked') ? failed() : okResult('good')
+    );
+    const { loop } = makeLoop({
+      script: [toolCall('https://blocked.test/a'), toolCall('https://fine.test/b'), 'done'],
+      executeTool: exec,
+    });
+
+    await loop.run('go');
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows a repeat of a request that succeeded', async () => {
+    // Only transport failures are remembered. Re-reading a resource is a
+    // legitimate thing to want, and blocking it would be the tool second-
+    // guessing the model about something it got right.
+    const exec = vi.fn(async () => okResult());
+    const { loop } = makeLoop({
+      script: [toolCall('https://fine.test/a'), toolCall('https://fine.test/a'), 'done'],
+      executeTool: exec,
+    });
+
+    await loop.run('go');
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows a repeat after an HTTP error, which is a real answer', async () => {
+    // A 503 clears; a 429 stops rate-limiting. A reachable server saying no is
+    // not the same as a request that never arrived.
+    const exec = vi.fn(async () => ({ ...okResult('rate limited'), status: 429 }));
+    const { loop } = makeLoop({
+      script: [toolCall('https://fine.test/a'), toolCall('https://fine.test/a'), 'done'],
+      executeTool: exec,
+    });
+
+    await loop.run('go');
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not spend the user\'s iteration budget on a request it refused to send', async () => {
+    const exec = vi.fn(async () => failed());
+    const { loop } = makeLoop({
+      script: [toolCall('https://blocked.test/a'), toolCall('https://blocked.test/a'), 'done'],
+      executeTool: exec,
+    });
+
+    const r = await loop.run('go');
+    // One request was actually sent, so one iteration was actually used.
+    expect(r.iterations).toBe(1);
+  });
+
+  it('does not ask the user to approve a request it will not send', async () => {
+    const confirm = vi.fn(async () => ({ approved: true }));
+    const exec = vi.fn(async () => failed());
+    const { loop } = makeLoop({
+      script: [toolCall('https://blocked.test/a'), toolCall('https://blocked.test/a'), 'done'],
+      settings: { confirmBeforeSend: true },
+      confirm,
+      executeTool: exec,
+    });
+
+    await loop.run('go');
+    // Spending the user's attention on a decision that cannot matter teaches
+    // them to approve without reading.
+    expect(confirm).toHaveBeenCalledTimes(1);
+  });
+
+  it('forgets failures between turns', async () => {
+    // A network that was down a minute ago may be up now. The memory is per
+    // turn, because that is the span in which repeating is certainly useless.
+    const exec = vi.fn(async () => failed());
+    const { loop } = makeLoop({
+      script: [toolCall('https://blocked.test/a'), 'gave up', toolCall('https://blocked.test/a'), 'gave up again'],
+      executeTool: exec,
+    });
+
+    await loop.run('first');
+    await loop.run('second');
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('agent loop — malformed tool calls', () => {
   it('repairs a malformed call on the first retry', async () => {
     const notices = [];

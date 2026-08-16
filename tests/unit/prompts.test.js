@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildSystemPrompt, capMessage, denialMessage, toolResultMessage } from '../../src/agent/prompts.js';
+import { buildSystemPrompt, capMessage, denialMessage, repeatedCallMessage, toolResultMessage } from '../../src/agent/prompts.js';
 
 /**
  * SPEC §10 calls prompt text load-bearing, and it is: small models follow the
@@ -141,6 +141,32 @@ describe('denialMessage', () => {
 
   it('is explicit when no reason was given', () => {
     expect(denialMessage(call)).toContain('No reason was given.');
+  });
+});
+
+describe('repeatedCallMessage', () => {
+  const call = { method: 'GET', url: 'https://wikipedia.org/wiki/Alan_Turing' };
+
+  it('says nothing was sent, and why repeating cannot help', () => {
+    const m = repeatedCallMessage(call);
+    expect(m).toContain('NOT SENT');
+    expect(m).toContain('GET https://wikipedia.org/wiki/Alan_Turing');
+    expect(m).toMatch(/will not be different/);
+  });
+
+  it('ends with the working URL when one is known', () => {
+    const m = repeatedCallMessage(call, 'https://en.wikipedia.org/api/rest_v1/page/summary/Alan_Turing');
+    expect(m.trim().split('\n').pop()).toBe(
+      'NEXT STEP: call the tool again with exactly this URL: https://en.wikipedia.org/api/rest_v1/page/summary/Alan_Turing'
+    );
+  });
+
+  it('offers a way forward even when no URL is known', () => {
+    // A dead end with no next step is how the model ends up narrating a
+    // response it never received.
+    const last = repeatedCallMessage(call).trim().split('\n').pop();
+    expect(last).toMatch(/^NEXT STEP:/);
+    expect(last).toMatch(/wiki tool with a plain search term/);
   });
 });
 

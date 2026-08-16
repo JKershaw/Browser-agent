@@ -883,3 +883,57 @@ what the source supports by reading the source, never by reading the failures.
 significant). Both failures are the model retrying the URL it was handed rather
 than switching tools. That is the repeat-loop from the previous section, still
 unaddressed, and the next thing worth fixing.
+
+## A guardrail that could not be shown to do anything
+
+Six of the eleven failures two sections ago were an identical URL re-sent until
+the iteration cap, and the bug a user reported was the same URL sent twice with
+a third under way. So the loop was closed: a request that already failed at the
+transport layer this turn is not sent again, and the model gets a `NOT SENT`
+result ending in the usual closing imperative.
+
+Then it was measured, and it does nothing.
+
+|  | repeated a failed request | wasted requests |
+|---|---|---|
+| wiki suite, before the guard | 0 / 140 samples | 0 of 237 |
+| wiki suite, with the guard | 0 / 140 samples | 0 of 240 |
+| unreachable host, before | 0 / 20 samples | 0 of 20 |
+| unreachable host, with the guard | 0 / 20 samples | 0 of 20 |
+
+`local-unreachable` was built specifically to trigger it — port 1 refuses the
+connection, there is no hint naming a URL that works, and no second tool to fall
+back on. Exactly one request per sample, in both arms.
+
+**The wiki tool removed the cause, not the symptom.** The repeats were never
+stubbornness; they were what a model does when it has no working alternative and
+is asked to try again. Give it one that works and the behaviour disappears.
+
+The guard is kept anyway, and this is a judgement call rather than a result:
+fifteen lines, eight tests, no measurable cost, and it bounds the damage on any
+host we will never have a tool for. But it is a seatbelt, not an improvement,
+and the evidence for removing it is written here should anyone want it.
+
+### What the new task found instead
+
+Asked to fetch an unreachable host and say what happened, the agent reports the
+failure honestly **19–20 times out of 20**. It does not invent a response. That
+is the property the whole error taxonomy exists to protect, and until now it was
+asserted rather than measured.
+
+### The fourth grader bug
+
+Its first answer pattern wanted "fail|error|could not|unable|refus" and marked
+four answers wrong for saying *"I cannot use the curl tool"* and *"not being
+able to fulfil the request"*. True rate 100%, measured rate 80%.
+
+Four graders in this project have now mismarked correct behaviour, and **all
+four erred the same way**: a pattern written from one imagined phrasing, which
+the model then declined to use. The rule already recorded — enumerate what the
+source supports by reading the source — needs a second half: enumerate how an
+answer can be right by reading what the model actually wrote, before believing a
+rate that looks bad.
+
+Both arms above are re-graded from saved samples rather than re-run. That the
+harness stores every transcript is what made a grader fix cost seconds instead
+of GPU minutes.

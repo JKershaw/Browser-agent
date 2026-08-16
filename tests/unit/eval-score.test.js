@@ -120,6 +120,23 @@ describe('grade', () => {
     expect(grade(TASK, { requests: [], stopReason: 'unparseable', answer: '' })).toBe(Grade.MALFORMED);
   });
 
+  it('grades an unreachable-host task on the answer, not on the failure', () => {
+    // The failure is the premise. What is being graded is whether the agent
+    // said so rather than inventing a response.
+    const task = {
+      expectTool: true,
+      expect: { host: '127.0.0.1:1' },
+      allowRequestFailure: true,
+      answer: /fail|refus/i,
+    };
+    const requests = [req('http://127.0.0.1:1/nope', { status: 'error' })];
+    expect(grade(task, { requests, answer: 'The request failed.' })).toBe(Grade.OK);
+    expect(grade(task, { requests, answer: 'The page says hello.' })).toBe(Grade.ANSWER_WRONG);
+    // Without the flag it is still a failed request, as before.
+    expect(grade({ ...task, allowRequestFailure: false }, { requests, answer: 'The request failed.' }))
+      .toBe(Grade.REQUEST_FAILED);
+  });
+
   it('grades a no-tool task on restraint before content', () => {
     const task = { expectTool: false, answer: /paris/i };
     expect(grade(task, { requests: [], answer: 'Paris.' })).toBe(Grade.OK);

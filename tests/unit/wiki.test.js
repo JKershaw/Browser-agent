@@ -74,6 +74,18 @@ describe('URL construction', () => {
     expect(articleUrlFor('Alan Turing')).toBe('https://en.wikipedia.org/wiki/Alan_Turing');
   });
 
+  it('produces a URL rather than the string "undefined" for a missing value', () => {
+    // These are called with whatever the parser hands over. A guard that turns
+    // absent input into the literal text "undefined" would send a request for
+    // an article by that name, which exists and is not what anyone asked for.
+    for (const build of [searchUrlFor, summaryUrlFor, articleUrlFor]) {
+      for (const bad of [undefined, null, '']) {
+        expect(build(bad)).not.toContain('undefined');
+        expect(build(bad)).not.toContain('null');
+      }
+    }
+  });
+
   it('never produces the www portal, which answers the article API with a 500', () => {
     // Two of the eleven measured failures built exactly that host.
     for (const u of [searchUrlFor('x'), summaryUrlFor('x'), articleUrlFor('x')]) {
@@ -171,6 +183,30 @@ describe('executeWiki', () => {
       { query: 'x' },
       { fetchImpl: router({ search: makeResponse({ body: '<html>error</html>' }) }) }
     );
+    expect(r.ok).toBe(false);
+    expect(r.error.kind).toBe(WikiError.BAD_RESPONSE);
+  });
+
+  it('admits it found an article it could not read', async () => {
+    // Summary refused and the snippet is empty: there is a title but no text.
+    // Reporting the title alone would invite the model to answer from the name.
+    const fetchImpl = router({
+      search: makeResponse({ body: searchBody([{ title: 'Alan Turing', snippet: '' }]) }),
+      summary: makeResponse({ status: 404, body: 'nope' }),
+    });
+    const r = await executeWiki({ query: 'alan turing' }, { fetchImpl });
+    expect(r.ok).toBe(false);
+    expect(r.error.kind).toBe(WikiError.BAD_RESPONSE);
+    expect(r.error.message).toContain('Alan Turing');
+    expect(r.title).toBe('Alan Turing');
+  });
+
+  it('treats a summary that parses but carries no extract as unreadable', async () => {
+    const fetchImpl = router({
+      search: makeResponse({ body: searchBody([{ title: 'Alan Turing', snippet: '' }]) }),
+      summary: makeResponse({ body: '{"not_an_extract": true}' }),
+    });
+    const r = await executeWiki({ query: 'alan turing' }, { fetchImpl });
     expect(r.ok).toBe(false);
     expect(r.error.kind).toBe(WikiError.BAD_RESPONSE);
   });

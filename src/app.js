@@ -112,11 +112,11 @@ export function createApp(opts = {}) {
         // requests. Settling only the first would leave the article fetch
         // invisible — a tool that quietly reaches the network more often than
         // the log admits is exactly what this app exists not to be.
+        // `executeCurl` attaches `request` to every outcome it returns, success
+        // or failure, so each hop can name itself to the log.
         const [first, ...rest] = result.requests;
         if (first) log.settle(entry.id, first);
-        for (const hop of rest) {
-          log.settle(log.start({ args: hop.request ?? { method: 'GET', url: '' } }).id, hop);
-        }
+        for (const hop of rest) log.settle(log.start({ args: hop.request }).id, hop);
         return result;
       }
 

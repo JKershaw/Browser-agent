@@ -34,6 +34,32 @@ describe('buildSystemPrompt', () => {
     expect(base()).toMatch(/rather than pretending the request worked or inventing data/);
   });
 
+  it('says the tool is optional, so a plain answer is not a failure', () => {
+    // Without this the model answered "none of the provided tools can be used
+    // to answer the question" when asked for the capital of France.
+    const p = buildSystemPrompt();
+    expect(p).toMatch(/tool is optional/i);
+    expect(p).toMatch(/plain prose/);
+  });
+
+  it('forbids sending the example URL, which models copy', () => {
+    // 17 samples out of 20 sent https://example.com/... instead of the URL
+    // they were given, and the first real-model e2e failure was the same
+    // substitution.
+    const p = buildSystemPrompt();
+    expect(p).toMatch(/placeholder\. Never send it/);
+    expect(p).toMatch(/character for character/);
+  });
+
+  it('warns that HTML pages are unreachable and APIs are not', () => {
+    // Not decoration: without this the 0.6B model reached for the article URL
+    // on every Wikipedia lookup, which the browser refuses cross-origin.
+    const p = buildSystemPrompt();
+    expect(p).toMatch(/CORS/);
+    expect(p).toMatch(/JSON API/i);
+    expect(p).toMatch(/do not retry it/i);
+  });
+
   it('explains the TOOL RESULT marker it will receive', () => {
     expect(base()).toContain('TOOL RESULT');
   });

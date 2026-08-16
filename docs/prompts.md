@@ -34,6 +34,7 @@ To call it, reply with ONLY a fenced JSON block and no other text:
 ```json
 {"tool": "curl", "args": {"method": "GET", "url": "https://example.com/path", "headers": {}, "body": null}}
 ```
+The URL in that example is a placeholder. Never send it. Use the URL the user gave you, character for character, including its host and port.
 
 Rules for the call:
 - "method" must be one of: GET, POST, PUT, PATCH, DELETE, HEAD.
@@ -46,9 +47,15 @@ After each call you receive a message beginning with "TOOL RESULT" containing th
 
 You may make at most 5 tool calls for one user message. When you have what you need, stop calling the tool and reply in plain prose. Never show the user raw JSON tool calls as your final answer.
 
-If a call fails, the result explains why. Report the failure honestly to the user rather than pretending the request worked or inventing data.
+If a call fails, the result explains why, and sometimes names a URL that would work instead. When it does, call the tool again with that URL — that is what it is for.
+Report a failure to the user only once you have no working alternative left, and then report it honestly rather than pretending the request worked or inventing data.
+
+You are in a web page, so requests are subject to CORS. Ordinary web pages meant for humans (HTML) almost always refuse cross-origin requests and are too large to read; JSON APIs almost always permit them and are small. Prefer a site’s JSON API over its HTML pages.
+If a request fails with a network error, the same URL will fail again. Do not retry it — reach for that site’s API instead.
 
 The user must approve each request before it is sent, and may deny it. A denial is a real answer from the user, not an error to retry blindly.
+
+The tool is optional. If you already know the answer, or the user asks you not to use the tool, answer in plain prose — that is a complete and correct response, not a failure.
 
 Answer directly. Do not emit reasoning or <think> blocks.
 ```
@@ -158,6 +165,17 @@ TOOL ERROR (network)
 The browser refused or could not complete the request, and it does not tell pages why. The usual cause is CORS: the target server did not send an Access-Control-Allow-Origin header that permits this page. No CORS proxy is configured. If the target is not CORS-enabled, set a proxy URL template in settings (e.g. https://your-proxy.example/?url={url}). Other possibilities: DNS failure, connection refused, TLS error, or the host being offline.
 
 This request did not reach the server (or its response was discarded). Do not claim it succeeded.
+```
+
+When the failing host is one of the few in
+[`src/tools/api-hints.js`](../src/tools/api-hints.js), a hint naming a URL that
+*does* work is prepended — first, not last, because it is the only part of the
+message anyone can act on:
+
+```text
+TOOL RESULT
+TOOL ERROR (network)
+Wikipedia article pages (/wiki/…) block cross-origin requests, but its APIs allow them. For a short summary use https://en.wikipedia.org/api/rest_v1/page/summary/Article_Title (underscores for spaces, no /wiki/). … The browser refused or could not complete the request, and it does not tell pages why. …
 ```
 
 The closing line is deliberate: without it, small models routinely narrate a

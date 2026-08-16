@@ -25,6 +25,8 @@ src/
   tools/
     curl.js         fetch wrapper: proxy, credentials, timeout, capped read,
                     error taxonomy, masking.
+    api-hints.js    For the few hosts whose HTML is unreachable but whose API
+                    is not: the URL that would have worked.
   llm/
     engine.js       The engine contract + WebGPU/memory capability detection.
     webllm.js       WebLLM implementation, model tiers, default-model choice.
@@ -221,6 +223,39 @@ sees and the log the user reads. Nothing collapses into "request failed".
 | `network` | `fetch` threw | That the browser hides the reason; that CORS is the usual cause; whether a proxy is configured; what else it could be. |
 | `read_failed` | Body stream broke mid-read | The underlying message. |
 
+### Recovering from a network failure
+
+"The usual cause is CORS" is true, and no model can act on it. Measured on
+Qwen3-0.6B and Qwen3-1.7B, asked to look something up on Wikipedia: both
+fetched the article URL, both failed, 0 out of 20 each. Told in the system
+prompt that HTML is unreachable, the 0.6B stopped fetching articles and started
+inventing endpoints instead. Knowing what will fail does not tell you what will
+work.
+
+So a `network` failure on a host in `api-hints.js` carries a remedy, and the
+shape of that remedy is the whole finding:
+
+- **It names a real URL, not a template.** The first version said
+  "…/page/summary/Article_Title" and the model requested `Article_Title`,
+  literally — the same failure as the `example.com/path` in our own schema
+  block. A hint is a function of the URL that failed, so it can name the
+  article that was actually asked for.
+- **It ends the message.** Told the same thing in prose, the model rewrote the
+  hostname, or read the URL back to the user as advice, and never called the
+  tool: 0 out of 20. As a closing imperative — `NEXT STEP: call the tool again
+  with exactly this URL: …` — 18 out of 20. It can copy a URL out of the user's
+  message at ~100%; what it could not do was find one inside a paragraph.
+- **It is withheld when it would be a guess.** `retryUrlFor()` yields an
+  instruction only when the advice names one concrete endpoint. A confident
+  instruction pointing at a guessed title is worse than none.
+- **It costs a round-trip, deliberately.** The agent discovers the endpoint by
+  trying and failing, in the open, on cards the user can see — rather than a
+  hidden lookup that quietly redirects a request the user approved.
+
+The list is small and always will be. Every entry is verified to send
+`Access-Control-Allow-Origin`; the alternative is pretending to know the whole
+web, and a wrong hint is worse than no hint.
+
 HTTP error statuses are **not** in this table. A 404 or 500 is data: it reaches
 the model with its status and body, and the model decides what to do.
 
@@ -370,6 +405,16 @@ the sheets into a permanent side rail. Colours are tokens redefined under
   behind the UI's back would leave the composer disabled and let boot download
   a second, larger tier at the same time. The app is served on a fixed port so
   the origin — and therefore the weight cache — survives between runs.
+
+- **Reliability measurement** (`npm run eval`, `scripts/tool-eval.js`) is not a
+  test and has no pass/fail: it runs each task many times and reports a success
+  rate with a confidence interval. It grades the *request the model built* and
+  the answer it gave, in eight buckets — the distinction that matters most being
+  `wrong_target`, a well-formed schema-valid call to somewhere nobody asked for,
+  which `model-check.js` scores as a first-try success. The grading rules are
+  pure and unit-tested in `tests/unit/eval-score.test.js`; only the driving
+  needs a GPU. Task sets are split `dev`/`holdout` so a prompt cannot be tuned
+  until the tasks in front of it pass without that showing up.
 
 The e2e suite scripts the model via `?mockEngine=1&mockScript=[…]`, with
 `mockLoadMs`, `mockLoadFail` and `mockCached` to hold, fail or shortcut the

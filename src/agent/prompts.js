@@ -33,6 +33,14 @@ export function buildSystemPrompt(opts = {}) {
     '{"tool": "curl", "args": {"method": "GET", "url": "https://example.com/path", "headers": {}, "body": null}}',
     '```',
     '',
+    // The URL above is the most-copied string in this prompt. Measured on
+    // Qwen3-0.6B: asked to "fetch http://127.0.0.1:PORT/status/503", it sent
+    // https://example.com/status/503 — or plain https://example.com/path — in
+    // 17 samples out of 20. The same substitution produced the first failure
+    // this project's real-model suite ever showed. An example is something a
+    // small model copies, so the rule against copying it has to be stated.
+    'The URL in that example is a placeholder. Never send it. Use the URL the user gave you, character for character, including its host and port.',
+    '',
     'Rules for the call:',
     `- "method" must be one of: ${ALLOWED_METHODS.join(', ')}.`,
     '- "url" must be absolute and start with http:// or https://.',
@@ -44,7 +52,19 @@ export function buildSystemPrompt(opts = {}) {
     '',
     `You may make at most ${maxIterations} tool calls for one user message. When you have what you need, stop calling the tool and reply in plain prose. Never show the user raw JSON tool calls as your final answer.`,
     '',
-    'If a call fails, the result explains why. Report the failure honestly to the user rather than pretending the request worked or inventing data.',
+    // "Report the failure honestly" used to stand alone here, and a 0.6B model
+    // obeyed it to the letter: handed a failure whose message named a URL that
+    // would have worked, it reported the failure and stopped. An instruction to
+    // give up beats a hint unless the order between them is stated.
+    'If a call fails, the result explains why, and sometimes names a URL that would work instead. When it does, call the tool again with that URL — that is what it is for.',
+    'Report a failure to the user only once you have no working alternative left, and then report it honestly rather than pretending the request worked or inventing data.',
+    '',
+    // The defining constraint of running in a page, and until now the model was
+    // never told about it. Measured on Qwen3-0.6B: asked to look something up
+    // on Wikipedia, it reached for the article URL every time, which browsers
+    // refuse to fetch cross-origin — 0 out of 20.
+    'You are in a web page, so requests are subject to CORS. Ordinary web pages meant for humans (HTML) almost always refuse cross-origin requests and are too large to read; JSON APIs almost always permit them and are small. Prefer a site’s JSON API over its HTML pages.',
+    'If a request fails with a network error, the same URL will fail again. Do not retry it — reach for that site’s API instead.',
   ];
 
   if (credentialNames.length > 0) {
@@ -68,6 +88,18 @@ export function buildSystemPrompt(opts = {}) {
   lines.push(
     '',
     'The user must approve each request before it is sent, and may deny it. A denial is a real answer from the user, not an error to retry blindly.'
+  );
+
+  // Last, deliberately. Everything above this point is about making calls, and
+  // a 0.6B model that had read all of it answered "none of the provided tools
+  // can be used to answer the question" when asked for the capital of France —
+  // 100% before the tool guidance grew, 50% after. Stated near the top it
+  // changed nothing (50% -> 55%, intervals overlapping). The NEXT STEP line had
+  // already shown that for this model the end of a message is worth more than
+  // the middle of one.
+  lines.push(
+    '',
+    'The tool is optional. If you already know the answer, or the user asks you not to use the tool, answer in plain prose — that is a complete and correct response, not a failure.'
   );
 
   if (!thinking) {

@@ -403,7 +403,9 @@ site's data and reload.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the module map, the engine contract,
 the agent-loop sequence, the tool-call schema and the error taxonomy;
-[docs/prompts.md](docs/prompts.md) for every prompt verbatim; [SPEC.md](SPEC.md)
+[docs/prompts.md](docs/prompts.md) for every prompt verbatim;
+[docs/research-notes.md](docs/research-notes.md) for how our measured prompt
+lessons line up with published research; [SPEC.md](SPEC.md)
 for the original design brief; and [BUILD_LOG.md](BUILD_LOG.md) for how it was
 built, including what the adversarial reviews found.
 

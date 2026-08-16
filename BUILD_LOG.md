@@ -1180,3 +1180,29 @@ it is a much better argument for them than the 99% ceiling was: the model
 demonstrably cannot hold "fetch, then use the result to fetch again" as a plan
 on its own. Baseline landed with no fix, as ever, so whatever moves it next is
 measured and not remembered.
+
+## Prompt review against the literature
+
+Before starting the decomposition work, every prompt got a fresh-eyes review
+against current research and practice (August 2026), written up in
+`docs/research-notes.md`. The satisfying part: three of our hard-won lessons
+turn out to be independent replications of documented phenomena — placeholder
+copying is "few-shot regurgitation" in the on-device-SLM literature,
+position-beats-content is lost-in-the-middle (known to be stronger in small
+models), and the whole Phase 3 thesis is the small-model end of
+ReWOO/plan-and-execute. Our fixes are the cheap ends of the documented
+mitigations, so nothing gets rewritten.
+
+The review found one genuine gap and queued two experiments, none acted on
+yet:
+
+- **Gap:** the repair prompt always shows the `curl` example — even repairing
+  a failed `wiki` call — and its `https://example.com` carries no placeholder
+  warning in scope. Rare path; needs a repro task and a before-number first.
+- **Queued:** sampling A/B — we run temp 0.6 with engine-default top-p, which
+  matches neither Qwen's thinking recipe (0.6/0.95) nor its non-thinking one
+  (0.7/0.8, top-k 20). Nobody has measured our operating point against the
+  card's.
+- **Queued:** the chain task with thinking mode on, purely to learn the
+  ceiling the deterministic decomposition competes against (thinking triples
+  round-trip latency, so it is calibration, not a candidate default).

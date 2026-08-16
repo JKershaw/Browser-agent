@@ -15,7 +15,9 @@
     "test:e2e": "playwright test",
     "pretest:e2e:real": "npm run build",
     "test:e2e:real": "REAL_MODEL=1 playwright test tests/e2e/real-model.spec.js",
-    "serve:dist": "node scripts/serve-dist.js"
+    "serve:dist": "node scripts/serve-dist.js",
+    "preeval": "npm run build",
+    "eval": "node scripts/tool-eval.js"
   },
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.84"

@@ -371,6 +371,16 @@ the sheets into a permanent side rail. Colours are tokens redefined under
   a second, larger tier at the same time. The app is served on a fixed port so
   the origin — and therefore the weight cache — survives between runs.
 
+- **Reliability measurement** (`npm run eval`, `scripts/tool-eval.js`) is not a
+  test and has no pass/fail: it runs each task many times and reports a success
+  rate with a confidence interval. It grades the *request the model built* and
+  the answer it gave, in eight buckets — the distinction that matters most being
+  `wrong_target`, a well-formed schema-valid call to somewhere nobody asked for,
+  which `model-check.js` scores as a first-try success. The grading rules are
+  pure and unit-tested in `tests/unit/eval-score.test.js`; only the driving
+  needs a GPU. Task sets are split `dev`/`holdout` so a prompt cannot be tuned
+  until the tasks in front of it pass without that showing up.
+
 The e2e suite scripts the model via `?mockEngine=1&mockScript=[…]`, with
 `mockLoadMs`, `mockLoadFail` and `mockCached` to hold, fail or shortcut the
 simulated load. That flag

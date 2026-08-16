@@ -244,6 +244,25 @@ Two things about it are worth knowing before you run it:
 There is also `node scripts/model-check.js`, which compares tool-call
 reliability across the three model tiers. It needs a GPU.
 
+### Measuring reliability
+
+A pass/fail test tells you what the model did once. A small model at
+temperature 0.6 is a distribution, so "does the tool contract hold" is a
+question about a *rate*:
+
+```bash
+npm run eval -- --suite local --n 20     # hermetic: does it build the request it was given?
+npm run eval -- --suite wiki  --n 20     # real Wikipedia: can it find something?
+npm run eval -- --suite all --holdout    # the tasks not used for tuning
+```
+
+It grades the request the model actually built — not merely that it built one —
+and reports a success rate with a 95% confidence interval. Tasks come in `dev`
+and `holdout` halves: iterate against dev, and check holdout only at
+checkpoints, because a prompt tuned until the tasks in front of it pass has been
+fitted to those tasks. Needs a GPU, and shares the real-model suite's browser
+profile so the weights are downloaded once.
+
 ---
 
 ## When the model will not load

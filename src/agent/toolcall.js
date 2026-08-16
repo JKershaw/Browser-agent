@@ -9,8 +9,16 @@
  * @module agent/toolcall
  */
 
-/** The only tool this agent exposes. */
+import { searchUrlFor } from '../tools/wiki-urls.js';
+
+/** The general HTTP tool. */
 export const TOOL_NAME = 'curl';
+
+/** The Wikipedia lookup tool; see `tools/wiki.js` for why it exists. */
+export const WIKI_TOOL = 'wiki';
+
+/** Every tool name the parser will accept. */
+export const TOOL_NAMES = Object.freeze([TOOL_NAME, WIKI_TOOL]);
 
 /** HTTP methods the tool accepts, upper-case. */
 export const ALLOWED_METHODS = Object.freeze(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']);
@@ -37,6 +45,7 @@ export const ParseError = Object.freeze({
   BAD_HEADERS: 'E_BAD_HEADERS',
   BAD_BODY: 'E_BAD_BODY',
   BODY_NOT_ALLOWED: 'E_BODY_NOT_ALLOWED',
+  BAD_QUERY: 'E_BAD_QUERY',
 });
 
 /**
@@ -174,6 +183,33 @@ function err(code, message) {
 }
 
 /**
+ * Validate a `wiki` call and give it a URL.
+ *
+ * The URL is *derived*, never taken from the model — that is the entire point
+ * of the tool. It is attached anyway because it is the request the confirmation
+ * card, the log and the tool card will show, and a card that cannot name where
+ * the request is going would be a real loss: the user's veto has to stay
+ * informed no matter which tool asked.
+ *
+ * @param {object} args
+ * @returns {{ok: true, call: object}|{ok: false, error: {code: string, message: string}}}
+ */
+function validateWikiCall(args) {
+  const raw = args.query ?? args.q ?? args.search ?? args.term ?? args.title;
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return err(ParseError.BAD_QUERY, 'args.query must be a non-empty search term, e.g. {"query": "Alan Turing"}.');
+  }
+  const query = raw.trim();
+  return {
+    ok: true,
+    call: {
+      tool: WIKI_TOOL,
+      args: { query, method: 'GET', url: searchUrlFor(query), headers: {}, body: null },
+    },
+  };
+}
+
+/**
  * Validate a parsed object against the tool-call schema and normalise it.
  *
  * Normalisation performed: method upper-cased, header names/values coerced to
@@ -188,11 +224,29 @@ export function validateToolCall(obj) {
     return err(ParseError.NOT_OBJECT, 'Tool call must be a JSON object.');
   }
 
-  if (obj.tool !== TOOL_NAME) {
+  if (!TOOL_NAMES.includes(obj.tool)) {
     return err(
       ParseError.UNKNOWN_TOOL,
-      `Unknown tool ${JSON.stringify(obj.tool)}. The only available tool is "${TOOL_NAME}".`
+      `Unknown tool ${JSON.stringify(obj.tool)}. The available tools are: ${TOOL_NAMES.map((t) => `"${t}"`).join(', ')}.`
     );
+  }
+
+  // Leniency, deliberately, and confined to `wiki`:
+  // `{"tool":"wiki","args":"Alan Turing"}` and `{"tool":"wiki","query":"Alan
+  // Turing"}` are both things a small model writes, and both say unambiguously
+  // what it wants. Rejecting them buys a repair round and a second chance to
+  // get the shape wrong, in exchange for nothing.
+  //
+  // `curl`'s validation is left exactly as it was. Loosening both at once would
+  // put a second change into the measurement that decides whether adding a tool
+  // costs anything on the existing curl tasks.
+  if (obj.tool === WIKI_TOOL) {
+    if (typeof obj.args === 'string') return validateWikiCall({ query: obj.args });
+    if (obj.args === undefined || obj.args === null) return validateWikiCall(obj);
+    if (typeof obj.args !== 'object' || Array.isArray(obj.args)) {
+      return err(ParseError.MISSING_ARGS, 'Tool call is missing an "args" object.');
+    }
+    return validateWikiCall(obj.args);
   }
 
   const args = obj.args;

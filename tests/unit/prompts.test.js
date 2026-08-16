@@ -38,17 +38,41 @@ describe('buildSystemPrompt', () => {
     // Without this the model answered "none of the provided tools can be used
     // to answer the question" when asked for the capital of France.
     const p = buildSystemPrompt();
-    expect(p).toMatch(/tool is optional/i);
+    // Plural: with two tools, "the tool is optional" read as naming curl
+    // alone, leaving the easier one exempt from the only line granting
+    // restraint.
+    expect(p).toMatch(/Both tools are optional/i);
     expect(p).toMatch(/plain prose/);
   });
 
-  it('forbids sending the example URL, which models copy', () => {
+  it('forbids sending either example value, which models copy', () => {
     // 17 samples out of 20 sent https://example.com/... instead of the URL
     // they were given, and the first real-model e2e failure was the same
-    // substitution.
+    // substitution. The wiki example is a person's name rather than an
+    // obvious template, which makes it likelier to be copied, not less.
     const p = buildSystemPrompt();
     expect(p).toMatch(/placeholder\. Never send it/);
+    expect(p).toMatch(/"Alan Turing" is a placeholder too/);
     expect(p).toMatch(/character for character/);
+    expect(p).toMatch(/Search for what the user actually asked about/);
+  });
+
+  it('offers the wiki tool first and says when to pick it', () => {
+    const p = buildSystemPrompt();
+    // A model that reads no further than the first example should have found
+    // the one-argument tool.
+    expect(p.indexOf('"tool": "wiki"')).toBeLessThan(p.indexOf('"tool": "curl"'));
+    expect(p).toMatch(/takes a search term, not a URL/);
+    expect(p).toMatch(/If the user gives you a URL, use `curl` with that URL/);
+  });
+
+  it('makes the lookup rule conditional on needing a lookup', () => {
+    // Measured: "Use `wiki` whenever the answer would be on Wikipedia" is
+    // unconditionally true of almost any question, and took restraint on
+    // "answer without using a tool" from 100% to 0% in 20 samples out of 20.
+    const p = buildSystemPrompt();
+    expect(p).toMatch(/When you need to look something up/);
+    expect(p).not.toMatch(/whenever the answer would be on Wikipedia/);
   });
 
   it('warns that HTML pages are unreachable and APIs are not', () => {

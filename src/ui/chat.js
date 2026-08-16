@@ -294,6 +294,18 @@ export function createChatPane(root) {
           ]),
           isDelete ? el('p', { class: 'confirm-warn', text: 'DELETE always asks, even on approved domains.' }) : null,
           el('div', { class: 'confirm-url', text: maskSecrets(url, secrets) }),
+          // The wiki tool resolves a search term to a title and then fetches
+          // that article, so approving this card sends two requests, not one.
+          // A card that showed only the first would understate what the user is
+          // agreeing to — the one thing the confirmation step cannot do.
+          call.tool === 'wiki'
+            ? el('p', {
+                class: 'confirm-cred',
+                text:
+                  `Wikipedia lookup for “${call.args.query}”. Approving sends up to two requests to ${host}: ` +
+                  'this search, and then the article it matches.',
+              })
+            : null,
           credentialUse.used?.length
             ? el('p', { class: 'confirm-cred', text: `This request will carry your stored credential${credentialUse.used.length === 1 ? '' : 's'}: ${credentialUse.used.join(', ')}. Approve only if you trust ${host} with ${credentialUse.used.length === 1 ? 'it' : 'them'}.` })
             : null,

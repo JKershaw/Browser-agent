@@ -27,6 +27,10 @@ src/
                     error taxonomy, masking.
     api-hints.js    For the few hosts whose HTML is unreachable but whose API
                     is not: the URL that would have worked.
+    wiki.js         Wikipedia lookup that takes a search term, not a URL.
+                    Resolves term -> title -> summary through curl.js.
+    wiki-urls.js    Wikipedia URL construction. Pure leaf, no imports, so
+                    toolcall.js can derive a call's URL without a cycle.
   llm/
     engine.js       The engine contract + WebGPU/memory capability detection.
     webllm.js       WebLLM implementation, model tiers, default-model choice.
@@ -156,17 +160,20 @@ Notes on the parts that are easy to get wrong:
 
 ## Tool-call contract
 
-The model requests a call by emitting a single fenced JSON block:
+The model requests a call by emitting a single fenced JSON block, naming one of
+two tools:
 
 ```json
 {"tool": "curl", "args": {"method": "GET", "url": "https://example.com", "headers": {}, "body": null}}
+{"tool": "wiki", "args": {"query": "Alan Turing"}}
 ```
 
 Schema, as enforced by `validateToolCall`:
 
 | Field | Type | Rules |
 |---|---|---|
-| `tool` | string | Must be `"curl"`. |
+| `tool` | string | `"curl"` or `"wiki"`. |
+| `args.query` | string | **wiki only.** Non-empty search term. `q`, `search`, `term` and `title` are accepted as aliases. |
 | `args.method` | string | One of GET, POST, PUT, PATCH, DELETE, HEAD. Case-insensitive, upper-cased. Defaults to GET if absent. |
 | `args.url` | string | Absolute, `http:` or `https:` only. Normalised via `new URL()`. |
 | `args.headers` | object | String values. Numbers and booleans are coerced; anything else is rejected. Names are trimmed and must be non-empty. |
@@ -185,6 +192,31 @@ Extraction is deliberately forgiving of everything *except* the schema:
   `{{credential}}` placeholders the system prompt teaches the model to write.
 - JSON that parses but has no `tool` key is **text, not a broken call**. A model
   answering a question *about* JSON must not trigger a repair round.
+- For `wiki` only, `{"tool":"wiki","args":"Alan Turing"}` and
+  `{"tool":"wiki","query":"Alan Turing"}` are accepted. Both say unambiguously
+  what the model wants, and a repair round is another chance to get the shape
+  wrong. `curl`'s validation is left strict on purpose, so that a change in the
+  curl task rates can only be caused by the prompt and not by the parser.
+
+### Why there is a second tool
+
+Measured on Qwen3-0.6B asked to look something up (n=20, and see BUILD_LOG):
+across eleven failures the **article title was correct eleven times** and the
+scheme, host and path around it were wrong in ten. Four recombined a suggested
+URL with their own — right host, wrong path, or the reverse.
+
+A URL asks the model to get four things right at once. A search term asks for
+the one it never gets wrong, and `wiki.js` does the rest: search resolves the
+term to a real title, and the title fetches the article. The ambiguous title,
+the `www` portal that answers the article API with a 500, and the redirect are
+all handled where the model cannot see them.
+
+The tool still runs its requests through `executeCurl`, so the allowlist,
+timeout, byte cap, proxy and redirect checks apply exactly as they do to a
+model-built request. It is a narrower interface to the same tool, not a way
+around its rules. Both of its requests are logged: a tool that reached the
+network more often than the log admitted would be a worse bargain than the
+failure it fixes.
 
 ### Parse error codes
 

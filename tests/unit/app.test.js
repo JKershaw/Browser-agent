@@ -6,6 +6,9 @@ import { createMockEngine } from '../../src/llm/mock.js';
 const toolCall = (url = 'https://api.test/x', method = 'GET') =>
   '```json\n' + JSON.stringify({ tool: 'curl', args: { method, url, headers: {}, body: null } }) + '\n```';
 
+const wikiCall = (query) =>
+  '```json\n' + JSON.stringify({ tool: 'wiki', args: { query } }) + '\n```';
+
 const okResponse = (body = '{"ok":true}') => ({
   status: 200,
   statusText: 'OK',
@@ -97,6 +100,50 @@ describe('createApp — tool execution', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ status: 'ok', method: 'GET', url: 'https://api.test/x' });
     expect(entries[0].response.status).toBe(200);
+  });
+
+  it('runs a wiki call and logs both of its requests', async () => {
+    // The tool makes two hops, and the log is a record of requests. One entry
+    // for a two-request tool would be a log that understates what the app did.
+    const bodies = {
+      '/w/api.php': JSON.stringify({ query: { search: [{ title: 'Alan Turing', snippet: 'x' }] } }),
+      '/api/rest_v1/': JSON.stringify({ extract: 'An English mathematician.' }),
+    };
+    const fetchImpl = vi.fn(async (url) => {
+      const key = Object.keys(bodies).find((k) => url.includes(k));
+      return okResponse(bodies[key]);
+    });
+    const app = makeApp({ script: [wikiCall('Alan Turing'), 'done'], fetchImpl });
+    app.settings.set({ confirmBeforeSend: false });
+
+    const r = await app.loop.run('who was alan turing');
+
+    expect(r.stopReason).toBe('text');
+    const entries = app.log.all();
+    expect(entries).toHaveLength(2);
+    expect(entries[0].url).toContain('/w/api.php');
+    expect(entries[1].url).toContain('/api/rest_v1/page/summary/Alan_Turing');
+    expect(entries.every((e) => e.status === 'ok')).toBe(true);
+
+    // And the model is handed prose, not a response envelope.
+    const toolMessage = r.transcript.find((m) => m.role === 'tool');
+    expect(toolMessage.content).toContain('WIKIPEDIA: Alan Turing');
+    expect(toolMessage.content).toContain('An English mathematician.');
+  });
+
+  it('logs a wiki failure without leaving an entry pending', async () => {
+    const app = makeApp({
+      script: [wikiCall('nothing'), 'done'],
+      fetchImpl: async () => {
+        throw new TypeError('Failed to fetch');
+      },
+    });
+    app.settings.set({ confirmBeforeSend: false });
+    await app.loop.run('go');
+
+    const entries = app.log.all();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ status: 'error' });
   });
 
   it('passes the current settings through to the tool', async () => {

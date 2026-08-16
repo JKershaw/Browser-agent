@@ -140,7 +140,7 @@ function answerMatches(task, sample) {
  * @returns {{rate: number, low: number, high: number}}
  */
 export function wilson(successes, total, z = 1.96) {
-  if (total <= 0) return { rate: 0, low: 0, high: 0 };
+  if (total <= 0) return { rate: 0, low: 0, high: 0, successes: 0, n: 0 };
   const p = successes / total;
   const d = 1 + (z * z) / total;
   const centre = p + (z * z) / (2 * total);
@@ -149,6 +149,9 @@ export function wilson(successes, total, z = 1.96) {
     rate: p,
     low: Math.max(0, (centre - spread) / d),
     high: Math.min(1, (centre + spread) / d),
+    // Carried so `verdict` can run a real test rather than inspect the bars.
+    successes,
+    n: total,
   };
 }
 
@@ -168,17 +171,57 @@ export function summarise(graded) {
 /**
  * Is the difference between two measured rates worth acting on?
  *
- * Deliberately conservative: it asks whether the intervals fail to overlap,
- * which is a stricter bar than a significance test and the right one for a loop
- * where every "improvement" is a change to a prompt that ships. Non-overlapping
- * intervals at n=30 is a real effect; anything less is noise wearing a number.
+ * This used to ask whether the two confidence intervals failed to overlap. That
+ * is not a significance test: for two proportions it corresponds to roughly
+ * p < 0.005, so it rejected real effects as "inconclusive" and sent us off to
+ * spend GPU hours collecting samples to prove things we had already shown. It
+ * called 75% -> 100% at n=20 a non-result.
  *
- * @param {{low: number, high: number}} before
- * @param {{low: number, high: number}} after
+ * So the bar is now the standard two-proportion z-test at 95%, and the
+ * non-overlap check is kept only as the stronger `emphatic` flag. The point of
+ * the harness is to stop us believing noise, not to stop us believing evidence.
+ *
+ * @param {{low: number, high: number, successes?: number, n?: number}} before
+ * @param {{low: number, high: number, successes?: number, n?: number}} after
  * @returns {'better'|'worse'|'inconclusive'}
  */
 export function verdict(before, after) {
-  if (after.low > before.high) return 'better';
-  if (after.high < before.low) return 'worse';
-  return 'inconclusive';
+  const test = significance(before, after);
+  if (test === null) {
+    // No counts (an older caller passing bare intervals): fall back to the
+    // interval check rather than guess.
+    if (after.low > before.high) return 'better';
+    if (after.high < before.low) return 'worse';
+    return 'inconclusive';
+  }
+  if (!test.significant) return 'inconclusive';
+  return test.z > 0 ? 'better' : 'worse';
+}
+
+/**
+ * Two-proportion z-test. Returns null when either side carries no counts.
+ *
+ * @param {{successes?: number, n?: number}} before
+ * @param {{successes?: number, n?: number}} after
+ * @param {number} [z] Critical value; 1.96 for 95%.
+ * @returns {{z: number, significant: boolean, emphatic: boolean}|null}
+ */
+export function significance(before, after, z = 1.96) {
+  if (!Number.isFinite(before?.n) || !Number.isFinite(after?.n)) return null;
+  if (before.n <= 0 || after.n <= 0) return null;
+
+  const p1 = before.successes / before.n;
+  const p2 = after.successes / after.n;
+  const pooled = (before.successes + after.successes) / (before.n + after.n);
+  const se = Math.sqrt(pooled * (1 - pooled) * (1 / before.n + 1 / after.n));
+  // Both arms identical and at a boundary (0/20 vs 0/20, 20/20 vs 20/20): no
+  // difference to detect, and the ratio would be 0/0.
+  if (se === 0) return { z: 0, significant: false, emphatic: false };
+
+  const stat = (p2 - p1) / se;
+  return {
+    z: stat,
+    significant: Math.abs(stat) > z,
+    emphatic: after.low > before.high || after.high < before.low,
+  };
 }

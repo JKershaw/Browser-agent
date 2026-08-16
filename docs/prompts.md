@@ -28,22 +28,31 @@ iteration limit:
 ```text
 You are a helpful assistant running entirely inside the user's web browser.
 
-You have exactly one tool: `curl`. It performs a single HTTP request using the browser's fetch API.
+You have two tools. To call one, reply with ONLY a fenced JSON block and no other text.
 
-To call it, reply with ONLY a fenced JSON block and no other text:
+`wiki` looks something up on Wikipedia. It takes a search term, not a URL:
+```json
+{"tool": "wiki", "args": {"query": "Alan Turing"}}
+```
+
+`curl` performs a single HTTP request using the browser's fetch API:
 ```json
 {"tool": "curl", "args": {"method": "GET", "url": "https://example.com/path", "headers": {}, "body": null}}
 ```
-The URL in that example is a placeholder. Never send it. Use the URL the user gave you, character for character, including its host and port.
 
-Rules for the call:
+When you need to look something up, use `wiki` for anything Wikipedia covers — a person, a place, an event, an idea. If the user gives you a URL, use `curl` with that URL exactly as written.
+
+The URL in that example is a placeholder. Never send it. Use the URL the user gave you, character for character, including its host and port.
+"Alan Turing" is a placeholder too. Search for what the user actually asked about.
+
+Rules for a `curl` call:
 - "method" must be one of: GET, POST, PUT, PATCH, DELETE, HEAD.
 - "url" must be absolute and start with http:// or https://.
 - "headers" is an object of string values; use {} when you need none.
 - "body" is a string or null. GET and HEAD must use null.
 - Emit exactly one tool call per reply. Never invent the result of a call.
 
-After each call you receive a message beginning with "TOOL RESULT" containing the HTTP status, selected headers and the response body (possibly truncated). Read it, then either call the tool again or answer the user in plain text.
+After each call you receive a message beginning with "TOOL RESULT". For `curl` it contains the HTTP status, selected headers and the response body (possibly truncated); for `wiki` it contains the article text. Read it, then either call a tool again or answer the user in plain text.
 
 You may make at most 5 tool calls for one user message. When you have what you need, stop calling the tool and reply in plain prose. Never show the user raw JSON tool calls as your final answer.
 
@@ -55,7 +64,7 @@ If a request fails with a network error, the same URL will fail again. Do not re
 
 The user must approve each request before it is sent, and may deny it. A denial is a real answer from the user, not an error to retry blindly.
 
-The tool is optional. If you already know the answer, or the user asks you not to use the tool, answer in plain prose — that is a complete and correct response, not a failure.
+Both tools are optional. If you already know the answer, or the user asks you not to use a tool, answer in plain prose without calling either one — that is a complete and correct response, not a failure.
 
 Answer directly. Do not emit reasoning or <think> blocks.
 ```
@@ -169,17 +178,52 @@ This request did not reach the server (or its response was discarded). Do not cl
 
 When the failing host is one of the few in
 [`src/tools/api-hints.js`](../src/tools/api-hints.js), a hint naming a URL that
-*does* work is prepended — first, not last, because it is the only part of the
-message anyone can act on:
+*does* work is prepended, and the same URL is repeated as a closing imperative:
 
 ```text
 TOOL RESULT
 TOOL ERROR (network)
-Wikipedia article pages (/wiki/…) block cross-origin requests, but its APIs allow them. For a short summary use https://en.wikipedia.org/api/rest_v1/page/summary/Article_Title (underscores for spaces, no /wiki/). … The browser refused or could not complete the request, and it does not tell pages why. …
+Wikipedia article pages block cross-origin requests; its REST API allows them. Request this instead: https://en.wikipedia.org/api/rest_v1/page/summary/Alan_Turing The browser refused or could not complete the request, and it does not tell pages why. …
+
+This request did not reach the server (or its response was discarded). Do not claim it succeeded.
+
+NEXT STEP: call the tool again with exactly this URL: https://en.wikipedia.org/api/rest_v1/page/summary/Alan_Turing
 ```
 
-The closing line is deliberate: without it, small models routinely narrate a
-plausible response they never received.
+The hint names the *real* URL for what was just asked for, never a template: an
+earlier version said `…/page/summary/Article_Title` and the model requested
+`Article_Title`, literally.
+
+Both closing lines are deliberate. Without "do not claim it succeeded", small
+models narrate a plausible response they never received; without `NEXT STEP`,
+they read the suggested URL back to the user as advice instead of calling it.
+
+---
+
+## Wiki tool result
+
+The `wiki` tool returns prose rather than a response envelope — no status, no
+headers, no JSON. The model's job is to read one paragraph and answer a question
+about it, and everything else is something it would have to look past:
+
+```text
+TOOL RESULT
+WIKIPEDIA: Alan Turing
+Alan Mathison Turing was an English mathematician, computer scientist, logician, cryptanalyst, philosopher and theoretical biologist. …
+Source: https://en.wikipedia.org/wiki/Alan_Turing
+```
+
+When the search matched nothing, the recovery path needs no URL — only another
+search term, which is the one thing the model reliably gets right:
+
+```text
+TOOL RESULT
+WIKI ERROR (no_match)
+No Wikipedia article matched "turring test".
+Closest article titles: Turing test, Turing machine.
+
+NEXT STEP: call the wiki tool again with one of those titles as the query.
+```
 
 ---
 

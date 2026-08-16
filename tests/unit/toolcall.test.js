@@ -270,6 +270,60 @@ describe('parseToolCall', () => {
   });
 });
 
+describe('the wiki tool', () => {
+  it('accepts a search term and derives the URL itself', () => {
+    const r = validateToolCall({ tool: 'wiki', args: { query: 'Alan Turing' } });
+    expect(r.ok).toBe(true);
+    expect(r.call.tool).toBe('wiki');
+    expect(r.call.args.query).toBe('Alan Turing');
+    // A derived URL, so the confirmation card and the log can still name where
+    // the request is going. The model never supplies it.
+    expect(r.call.args.url).toContain('srsearch=Alan%20Turing');
+    expect(r.call.args.method).toBe('GET');
+  });
+
+  it('accepts the shapes a small model actually writes', () => {
+    // Each of these says unambiguously what the model wants; rejecting them
+    // would buy a repair round and another chance to get the shape wrong.
+    for (const obj of [
+      { tool: 'wiki', args: 'Alan Turing' },
+      { tool: 'wiki', query: 'Alan Turing' },
+      { tool: 'wiki', args: { search: 'Alan Turing' } },
+      { tool: 'wiki', args: { title: 'Alan Turing' } },
+    ]) {
+      const r = validateToolCall(obj);
+      expect(r.ok, JSON.stringify(obj)).toBe(true);
+      expect(r.call.args.query).toBe('Alan Turing');
+    }
+  });
+
+  it('rejects a call with no search term', () => {
+    expect(validateToolCall({ tool: 'wiki', args: {} }).error.code).toBe(ParseError.BAD_QUERY);
+    expect(validateToolCall({ tool: 'wiki', args: { query: '  ' } }).error.code).toBe(ParseError.BAD_QUERY);
+  });
+
+  it('leaves curl validation exactly as strict as it was', () => {
+    // The leniency above is confined to wiki on purpose: loosening both at once
+    // would put a second change into the measurement of whether adding a tool
+    // costs anything on the existing curl tasks.
+    expect(validateToolCall({ tool: 'curl', args: 'https://a.test' }).error.code).toBe(ParseError.MISSING_ARGS);
+    expect(validateToolCall({ tool: 'curl', url: 'https://a.test' }).error.code).toBe(ParseError.MISSING_ARGS);
+  });
+
+  it('names both tools when the model invents a third', () => {
+    const r = validateToolCall({ tool: 'browse', args: {} });
+    expect(r.error.code).toBe(ParseError.UNKNOWN_TOOL);
+    expect(r.error.message).toContain('"curl"');
+    expect(r.error.message).toContain('"wiki"');
+  });
+
+  it('parses a fenced wiki call end to end', () => {
+    const r = parseToolCall('```json\n{"tool": "wiki", "args": {"query": "Bristol"}}\n```');
+    expect(r.kind).toBe('tool_call');
+    expect(r.call.args.query).toBe('Bristol');
+  });
+});
+
 describe('repairPrompt', () => {
   it('embeds the code and message and shows the required shape', () => {
     const p = repairPrompt({ code: ParseError.BAD_URL, message: 'args.url must be a non-empty string.' });

@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { Grade, grade, matchesTarget, summarise, verdict, wilson } from '../../scripts/eval/score.js';
+import { Grade, grade, matchesTarget, significance, summarise, verdict, wilson } from '../../scripts/eval/score.js';
 
 /** A request as `state/log.js` records it, reduced to what the scorer reads. */
 function req(url, over = {}) {
@@ -163,7 +163,7 @@ describe('wilson', () => {
   });
 
   it('returns zeroes rather than NaN for no samples', () => {
-    expect(wilson(0, 0)).toEqual({ rate: 0, low: 0, high: 0 });
+    expect(wilson(0, 0)).toEqual({ rate: 0, low: 0, high: 0, successes: 0, n: 0 });
   });
 });
 
@@ -183,15 +183,59 @@ describe('summarise', () => {
 });
 
 describe('verdict', () => {
-  it('calls an overlapping change inconclusive', () => {
+  it('calls a small change on a small sample inconclusive', () => {
     expect(verdict(wilson(6, 10), wilson(8, 10))).toBe('inconclusive');
   });
 
-  it('calls a separated improvement better', () => {
+  it('calls a large improvement better', () => {
     expect(verdict(wilson(10, 50), wilson(45, 50))).toBe('better');
   });
 
-  it('calls a separated regression worse', () => {
+  it('calls a large regression worse', () => {
     expect(verdict(wilson(45, 50), wilson(10, 50))).toBe('worse');
+  });
+
+  it('no longer rejects a real effect for missing a bar it never needed', () => {
+    // 15/20 -> 20/20. The intervals overlap by four tenths of a percentage
+    // point, and the old non-overlap rule called this nothing. It is p < 0.02.
+    expect(verdict(wilson(15, 20), wilson(20, 20))).toBe('better');
+    // The regression that prompted this: 20/20 -> 13/20.
+    expect(verdict(wilson(20, 20), wilson(13, 20))).toBe('worse');
+  });
+
+  it('still refuses to read a difference into identical arms', () => {
+    expect(verdict(wilson(20, 20), wilson(20, 20))).toBe('inconclusive');
+    expect(verdict(wilson(0, 20), wilson(0, 20))).toBe('inconclusive');
+  });
+
+  it('falls back to the interval check when counts are absent', () => {
+    // An older caller passing bare {low, high} must not silently get a verdict
+    // computed from undefined counts.
+    expect(verdict({ low: 0.1, high: 0.3 }, { low: 0.5, high: 0.8 })).toBe('better');
+    expect(verdict({ low: 0.5, high: 0.8 }, { low: 0.1, high: 0.3 })).toBe('worse');
+    expect(verdict({ low: 0.1, high: 0.6 }, { low: 0.4, high: 0.9 })).toBe('inconclusive');
+  });
+});
+
+describe('significance', () => {
+  it('separates a significant result from an emphatic one', () => {
+    const near = significance(wilson(15, 20), wilson(20, 20));
+    expect(near.significant).toBe(true);
+    // Non-overlapping intervals is the stronger claim, and this is not it.
+    expect(near.emphatic).toBe(false);
+
+    const wide = significance(wilson(10, 50), wilson(45, 50));
+    expect(wide.significant).toBe(true);
+    expect(wide.emphatic).toBe(true);
+  });
+
+  it('signs the statistic by direction of change', () => {
+    expect(significance(wilson(5, 20), wilson(15, 20)).z).toBeGreaterThan(0);
+    expect(significance(wilson(15, 20), wilson(5, 20)).z).toBeLessThan(0);
+  });
+
+  it('returns null rather than a number it cannot justify', () => {
+    expect(significance({ low: 0, high: 1 }, wilson(5, 10))).toBeNull();
+    expect(significance(wilson(0, 0), wilson(5, 10))).toBeNull();
   });
 });

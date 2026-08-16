@@ -10,12 +10,22 @@
  * step and the transcript holds the rest — plan-and-execute with the user as
  * planner and the loop as scheduler.
  *
+ * The same collapse happens on fan-out ("GET X and also GET Y",
+ * `fanout-local-two-gets`, 0/20 unaided): one response in view reads as
+ * "done" and the second errand is silently dropped. A conjunction whose next
+ * word is unmistakably a new action splits the same way — fan-out run as a
+ * chain, since parallel dispatch would only buy latency.
+ *
  * Splitting is deliberately conservative, because every existing suite runs
  * through it:
  *
  * - Only an explicit sequencing "then" splits — `", then "`, `"; then "`,
  *   `". Then "`, `" and then "`. A bare mid-clause "then" never does.
- * - A "then" that merely introduces the answer format — "then tell me what
+ * - An "and" splits only when what follows opens with an action verb — an
+ *   HTTP method in capitals, "fetch", "curl", "look up". Plain English "and"
+ *   never does: "War and Peace" stays a title, "and get me a coffee" stays a
+ *   clause (lowercase "get" is ambiguous, so it does not count).
+ * - A marker that merely introduces the answer format — "then tell me what
  *   the server said" — is not a second hop, and splitting it would spend a
  *   generation on nothing: the step stays attached. (Three long-standing
  *   suite tasks at 100% phrase themselves exactly this way.)
@@ -33,6 +43,14 @@
  * stop is kept with its sentence via the lookbehind.
  */
 const SEQUENCE = /[,;]\s+(?:and\s+)?then\s+|(?<=\.)\s+(?:and\s+)?then\s+|\s+and\s+then\s+/gi;
+
+/**
+ * A conjunction that starts a new errand rather than continuing a clause:
+ * "and (also)" followed by an unmistakable action verb. Case matters — `GET`
+ * is a tool instruction, "get" is everyday English — so this pattern has no
+ * `i` flag and runs as a second pass alongside {@link SEQUENCE}.
+ */
+const FANOUT = /,?\s+and\s+(?:also\s+)?(?=(?:GET|POST|PUT|DELETE|HEAD|PATCH|[Ff]etch|[Cc]url|[Ll]ook\s+up)\b)/g;
 
 /**
  * A clause that reports or formats the answer rather than doing new work.
@@ -59,17 +77,26 @@ export function splitSteps(text) {
   const s = String(text ?? '').trim();
   if (!s) return [s];
 
+  const cuts = [];
+  for (const re of [SEQUENCE, FANOUT]) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(s)) !== null) cuts.push({ index: m.index, end: re.lastIndex });
+  }
+  cuts.sort((a, b) => a.index - b.index);
+
   const parts = [];
   let last = 0;
-  SEQUENCE.lastIndex = 0;
-  let m;
-  while ((m = SEQUENCE.exec(s)) !== null) {
-    const before = s.slice(last, m.index);
-    const after = s.slice(SEQUENCE.lastIndex);
+  for (const cut of cuts) {
+    // The two patterns can in principle claim overlapping text; the earlier
+    // cut wins and a cut inside consumed text is dropped.
+    if (cut.index < last) continue;
+    const before = s.slice(last, cut.index);
+    const after = s.slice(cut.end);
     if (REPORTING.test(after)) continue;
     if (CONDITIONAL.test(before)) continue;
     parts.push(before);
-    last = SEQUENCE.lastIndex;
+    last = cut.end;
   }
   if (last === 0) return [s];
   parts.push(s.slice(last));

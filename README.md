@@ -128,10 +128,13 @@ simplest interface that can express what it wants, and do the rest in code.
 "Fetch this, then look that up" is two steps, and a 0.6B model silently drops
 the second one (measured: 3 in 20). So the app splits an explicitly sequenced
 message in code and walks the model through it one step at a time — you'll see
-a quiet "step 2 of 2" marker in the chat when this happens. The split is
-deliberately conservative: only an explicit ", then" / "and then" between two
-actions triggers it, and "then tell me…" or "if …, then …" never do. All steps
-share one tool-call budget.
+a quiet "step 2 of 2" marker in the chat when this happens. The same goes for
+a fan-out like "GET this and also GET that": the conjunction splits when what
+follows is unmistakably a new action (an HTTP method in capitals, "fetch",
+"look up"), and each errand runs as its own step. The split is deliberately
+conservative: "then tell me…", "if …, then …", plain-English "and" ("War and
+Peace", "and get me a coffee") never split. All steps share one tool-call
+budget.
 
 ### Keyboard
 

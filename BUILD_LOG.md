@@ -1377,3 +1377,46 @@ not a dispatch problem. For curl the number to move is 0/20, and the honest
 candidates are deterministic (split "GET X and also GET Y" into two steps
 the way "then" asks already split) rather than prompt text asking a 0.6B to
 remember its second errand.
+
+## Fan-out as a chain: the conjunction split, and what it uncovered
+
+The curl fan-out baseline was 0/20, with the second GET silently dropped in
+every sample. The mechanism, per the ladder's design note, is deterministic:
+`split.js` now also cuts on a conjunction whose next word is unmistakably a
+new action — "and (also)" followed by an HTTP method in capitals, "fetch",
+"curl", or "look up" — and runs the fan-out as a chain, one errand per fed
+step. Plain English "and" never splits: "War and Peace" stays a title,
+"and get me a coffee" stays a clause (lowercase "get" is ambiguous and
+deliberately does not count), and "and also the temperature" fails the
+verb test. The two-named-subjects ask ("look up A and B") also stays whole,
+which the wiki fan-out task pins at 95% in this run.
+
+`fanout-local-two-gets`: **0/20 → 4/20 (z = 2.11)** — and the pass rate is
+the least interesting number in the run. The *mechanics* moved from 0/20 to
+17/20: both GETs now go out, in order. What the split uncovered is the next
+layer, and it is rung 3 wearing a trench coat again: step 2's text is "GET
+/status/202, and tell me both the city and the status code you got", and
+the city is two turns up in step 1's tool result. Thirteen samples fetched
+the 202, then faced a closing clause asking for a fact their visible
+response cannot contain — and the repeat nudge, which went 7/7 live when
+the answer *was* in view, was ignored twice per sample here for exactly
+that reason: "answer from the response above" is not actionable when the
+response above is missing half the answer. The model's escape hatch is the
+only URL in front of it, re-sent until the shared budget dies mid-tool-call.
+Three more samples went hunting for "the city" on Wikipedia instead of
+making the second GET at all.
+
+The regression gate is clean and then some: all eleven pre-existing local
+tasks 20/20 — including `local-post-body` (was 18/20) and
+`memory-city-recall` (was 16/20), both mood, both back — so the splitter
+touched nothing it should not have. Wiki 154/160, with `wiki-turing-fact`
+at 15/20 against 18/20 in the last run (z = 1.25, not significant, and the
+failures are the known paraphrase wobble: "father of computing theory" for
+"computer science"; the ask provably does not split).
+
+The conclusion writes the next PR: dispatch is solved deterministically,
+and the residual failure on both the chain and the fan-out is the same
+missing mechanism — the answer from an earlier step has to be *put back in
+view*, either substituted into the next step's text or gathered into a
+final reporting step. That is the referent-substitution work the ladder
+already queues, now with two measured failure shapes waiting for it.

@@ -174,12 +174,15 @@ Notes on the parts that are easy to get wrong:
   with an appended-after-truncation instruction to answer instead of fetching
   again. Both memories reset between turns. See `docs/prompts.md` § Repeats.
 - **Multi-step asks are decomposed in code, not by the model.** `split.js`
-  breaks an explicitly sequenced message ("fetch X, then look up Y") into
-  steps, and the loop runs each as its own user turn on the shared transcript
-  — the model only ever holds the current step, because a 0.6B model holds a
-  two-step plan 3 times in 20 (`chain-json-then-wiki`). Splitting is
-  conservative: reporting clauses ("then tell me…"), conditionals ("if …,
-  then …") and bare mid-clause "then"s never split. All steps share one tool
+  breaks an explicitly sequenced message ("fetch X, then look up Y") or an
+  explicit fan-out ("GET X and also GET Y") into steps, and the loop runs
+  each as its own user turn on the shared transcript — the model only ever
+  holds the current step, because a 0.6B model holds a two-step plan 3 times
+  in 20 (`chain-json-then-wiki`) and drops a fan-out's second leg 20 times
+  in 20 (`fanout-local-two-gets`). Splitting is conservative: reporting
+  clauses ("then tell me…"), conditionals ("if …, then …"), bare mid-clause
+  "then"s and plain-English "and"s never split — a conjunction only cuts
+  when the next word is unmistakably a new action. All steps share one tool
   budget, keeping the system prompt's "at most N calls per user message"
   promise true. In the UI the user's message renders once as typed; later
   steps appear as quiet step markers.

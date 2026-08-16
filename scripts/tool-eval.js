@@ -200,6 +200,9 @@ function runOnce(page, ask, preamble) {
         errorKind: e.error?.kind || null,
       })),
       answer: last?.content || '',
+      // What the model was actually handed, so "it ignored the hint" and "the
+      // hint never arrived" can be told apart without guessing.
+      transcript: transcript.map((m) => ({ role: m.role, content: String(m.content).slice(0, 1200) })),
     };
   }, [ask, preamble]);
 }

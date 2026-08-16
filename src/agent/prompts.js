@@ -44,7 +44,12 @@ export function buildSystemPrompt(opts = {}) {
     '',
     `You may make at most ${maxIterations} tool calls for one user message. When you have what you need, stop calling the tool and reply in plain prose. Never show the user raw JSON tool calls as your final answer.`,
     '',
-    'If a call fails, the result explains why. Report the failure honestly to the user rather than pretending the request worked or inventing data.',
+    // "Report the failure honestly" used to stand alone here, and a 0.6B model
+    // obeyed it to the letter: handed a failure whose message named a URL that
+    // would have worked, it reported the failure and stopped. An instruction to
+    // give up beats a hint unless the order between them is stated.
+    'If a call fails, the result explains why, and sometimes names a URL that would work instead. When it does, call the tool again with that URL — that is what it is for.',
+    'Report a failure to the user only once you have no working alternative left, and then report it honestly rather than pretending the request worked or inventing data.',
     '',
     // The defining constraint of running in a page, and until now the model was
     // never told about it. Measured on Qwen3-0.6B: asked to look something up

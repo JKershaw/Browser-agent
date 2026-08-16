@@ -488,16 +488,17 @@ function explain(kind, ctx) {
       return `This page is served over HTTPS, and browsers refuse to let a secure page make plain http:// requests — the request is blocked before it is sent, whatever the target server allows. Use the https:// address of ${ctx.host} if it has one, or route the request through an HTTPS CORS proxy (an http:// proxy would be blocked in exactly the same way). Running this app over http:// locally also lifts the restriction.`;
     case CurlError.NETWORK:
       return [
+        // The remedy leads. Everything after it explains what went wrong; only
+        // this names a URL that would work, and a reader who stops after one
+        // sentence should have been given the useful one. The same lesson the
+        // load-failure card learned: the decisive sentence must not be last.
+        apiHintFor(ctx.host),
         'The browser refused or could not complete the request, and it does not tell pages why.',
         'The usual cause is CORS: the target server did not send an Access-Control-Allow-Origin header that permits this page.',
         ctx.proxyConfigured
           ? 'A CORS proxy is configured and was used, so the proxy itself may be down or may not allow this target.'
           : 'No CORS proxy is configured. If the target is not CORS-enabled, set a proxy URL template in settings (e.g. https://your-proxy.example/?url={url}).',
         'Other possibilities: DNS failure, connection refused, TLS error, or the host being offline.',
-        // Everything above tells you what went wrong; a model cannot act on any
-        // of it. This is the only part that names a URL that would work, and it
-        // appears only for hosts we have actually verified.
-        apiHintFor(ctx.host),
       ]
         .filter(Boolean)
         .join(' ');

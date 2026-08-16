@@ -1295,3 +1295,15 @@ apology instead of reading the transcript), `local-post-body` 18/20 (answers
 the status instead of the method), the repair prompt's wrong-tool example
 (queued behind a repro), and the two queued sampling/thinking experiments in
 `docs/research-notes.md`.
+
+A quick generalization probe of the chain-driver against the two harder
+chains from the probe ladder (3 samples each, read as transcripts): the
+wiki-then-wiki chain — Marie Curie, find her element, look it up, atomic
+number — ran both hops 3/3 and answered 88; the three-step chain — fetch
+JSON, look up the city, give a fact — ran all three hops 3/3 inside one
+budget. Before the splitter, wiki-then-wiki collapsed to recall in every
+sample. One honest caveat that is the next failure shape in line: asked for
+the element she discovered *first*, the model picked radium all three times
+when the article lists polonium first — the chain executes, but fine-grained
+fact selection inside a fetched result is its own weakness, and it would
+grade `answer_wrong` if promoted to a task.

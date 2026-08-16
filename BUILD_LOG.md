@@ -1455,3 +1455,35 @@ mechanism gets built on a hunch; both now have a numbered task waiting.
 Standing rule reaffirmed the hard way: measure the cheap version first —
 it was wrong in a way no amount of design discussion would have predicted,
 and it cost one GPU run to find out.
+
+## Closed steps: the wandering stops, and the real failure stands alone
+
+The upstream fix from the carry post-mortem, built deterministically: a
+non-final split step now gets a closed shape. If it does not already say
+what to do with its result, `closeStep` appends ", then tell me the result
+in one sentence." — the exact reporting-clause shape users write themselves
+in three long-standing 100% tasks. The final step always keeps the user's
+own words.
+
+Measured on `fanout-local-two-gets` (n=20): pass rate 4/20 → 2/20, which is
+noise (z = −0.89) — and the anatomy under it is the finding:
+
+- **Wandering eliminated**: wrong_target 4 → 0 (z = 2.11). No sample went
+  sightseeing to Wikipedia.
+- **Both legs dispatched 20/20**, up from 17/20.
+- **The repeat spiral halved** (repeat_ok 12 → 7; cap deaths down to 3),
+  and failures stopped being raw tool-call corpses: they are clean prose.
+- `chain-json-then-wiki` stayed 20/20. Single-step asks are untouched by
+  construction — `closeStep` only runs on split, non-final steps.
+
+What the clean failures say, and why this lands despite a flat pass rate:
+eighteen samples now answer step 2 by reporting the 202 they just received
+and silently dropping "the city" — only two answers name Bristol at all.
+Every masking failure has been peeled away: no wandering, no spiral, no
+budget deaths, both fetches made — what remains is rung 3 in its purest
+measured form, a fact two turns up that the model does not carry into its
+answer. That is precisely the substrate the queued extractor mechanism
+needs: crisp step answers to extract from, and a single failure mode to
+move. Two failure modes removed at no cost anywhere else is worth landing
+on its own; the rate was never going to move until the recall mechanism
+exists.

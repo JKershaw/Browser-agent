@@ -795,7 +795,12 @@ describe('agent loop — multi-step asks (the chain-driver)', () => {
 
     const users = loop.transcript.filter((m) => m.role === 'user' && !m.content.startsWith('TOOL RESULT'));
     expect(users).toHaveLength(2);
-    expect(users[0].content).toBe('Fetch http://a.test/one for the city please');
+    // The non-final step is fed with a closed shape — a bare action step
+    // wanders on its leftover budget (see closeStep). The final step keeps
+    // the user's own words.
+    expect(users[0].content).toBe(
+      'Fetch http://a.test/one for the city please, then tell me the result in one sentence.'
+    );
     expect(users[1].content).toBe('look that city up on Wikipedia please.');
     // The final answer is the last message, after both steps.
     expect(loop.transcript.at(-1).content).toBe('It is in the United Kingdom.');

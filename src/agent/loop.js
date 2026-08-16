@@ -10,7 +10,7 @@
 
 import { parseToolCall, repairPrompt } from './toolcall.js';
 import { describeCredentialUse } from '../tools/curl.js';
-import { buildSystemPrompt, capMessage, denialMessage, toolResultMessage } from './prompts.js';
+import { buildSystemPrompt, capMessage, denialMessage, repeatedCallMessage, toolResultMessage } from './prompts.js';
 
 /** Why a turn ended. @enum {string} */
 export const StopReason = Object.freeze({
@@ -107,6 +107,24 @@ export function originOf(url) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Identity of a request, for deciding whether the model is repeating itself.
+ *
+ * Tool, method and URL — not the headers or body. Two GETs to the same URL that
+ * differ only in an `Accept` header will fail for the same reason, and a model
+ * that varies a header while keeping an unfetchable URL is still looping.
+ *
+ * The `wiki` tool's URL is derived from its search term, so identical searches
+ * collide here exactly as they should.
+ *
+ * @param {{tool?: string, args: {method?: string, url?: string}}} call
+ * @returns {string}
+ */
+export function callKey(call) {
+  const method = String(call?.args?.method || 'GET').toUpperCase();
+  return `${call?.tool || 'curl'}|${method} ${call?.args?.url || ''}`;
 }
 
 /**
@@ -215,6 +233,14 @@ export function createAgentLoop(deps) {
 
     push('user', String(userText));
 
+    /**
+     * Requests already sent this turn that failed, keyed by tool, method and
+     * URL. A failed request is not worth repeating: the browser refuses it for
+     * a reason it will not disclose, and it refuses identically every time.
+     * @type {Map<string, {retryUrl?: string}>}
+     */
+    const failed = new Map();
+
     try {
       // The +1 pass exists so the model can speak after its last tool result
       // instead of the turn ending on a silent truncation.
@@ -260,6 +286,24 @@ export function createAgentLoop(deps) {
         }
 
         push('assistant', parsed.raw, { toolCall: parsed.call, prose: parsed.prose });
+
+        // Checked before the confirmation card, not after: asking the user to
+        // approve a request we already know will fail spends their attention on
+        // a decision that cannot matter, and teaches them to approve blindly.
+        const key = callKey(parsed.call);
+        const prior = failed.get(key);
+        if (prior) {
+          emit('onNotice', {
+            kind: 'info',
+            text: `Not sent: ${parsed.call.args.method} ${parsed.call.args.url} already failed in this turn.`,
+          });
+          push('tool', toolResultMessage(repeatedCallMessage(parsed.call.args, prior.retryUrl)), {
+            call: parsed.call,
+            repeated: true,
+          });
+          continue;
+        }
+
         emit('onToolCall', { call: parsed.call, iteration: state.iteration + 1 });
 
         let decision;
@@ -296,6 +340,11 @@ export function createAgentLoop(deps) {
           return finish(StopReason.TOOL_ERROR);
         }
         if (controller.signal.aborted) return finish(StopReason.CANCELLED);
+        // Only transport failures are remembered. An HTTP 4xx/5xx is a real
+        // answer from a reachable server, and re-requesting it can be perfectly
+        // sensible — a 503 clears, a 429 stops rate-limiting.
+        if (!result.ok) failed.set(key, { retryUrl: result.error?.retryUrl });
+
         emit('onToolResult', { call: parsed.call, result, iteration: state.iteration });
         push('tool', truncateForModel(toolResultMessage(formatResult(result)), settings.maxBytes), {
           call: parsed.call,

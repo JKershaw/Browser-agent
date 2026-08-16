@@ -97,7 +97,14 @@ export function grade(task, sample) {
   if (onTarget.length === 0) return Grade.WRONG_TARGET;
 
   const delivered = onTarget.filter((r) => r.status === 'ok');
-  if (delivered.length === 0) return Grade.REQUEST_FAILED;
+  if (delivered.length === 0) {
+    // Some tasks are about what the agent does when a request *cannot* succeed
+    // — an unreachable host, a refused connection. There the failure is the
+    // premise, not the outcome, and the thing being graded is whether the agent
+    // reported it honestly instead of inventing a response or looping.
+    if (!task.allowRequestFailure) return Grade.REQUEST_FAILED;
+    return answerMatches(task, sample) ? Grade.OK : Grade.ANSWER_WRONG;
+  }
 
   // `status: 'ok'` means the round-trip happened, not that the server agreed.
   // A 404 is data the model is entitled to reason about, but for a lookup task

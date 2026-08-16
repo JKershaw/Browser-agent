@@ -166,6 +166,38 @@ export function denialMessage(call, reason) {
 }
 
 /**
+ * Result handed back when the model asks for a request it already made and
+ * which already failed.
+ *
+ * Nothing is sent. A request that failed for a reason the browser will not
+ * explain — CORS, almost always — fails identically the second and third time,
+ * and the measured behaviour is that a small model will spend its whole
+ * iteration budget finding that out: six of eleven failures in one run were an
+ * identical URL re-sent until the cap, and the app that a user reported had sent
+ * the same unfetchable article URL twice with a third under way.
+ *
+ * The system prompt already says not to retry a network failure. This is the
+ * same instruction at the point of use, where it cannot be crowded out.
+ *
+ * @param {{method: string, url: string}} call
+ * @param {string} [retryUrl] A URL known to work, if `api-hints` named one.
+ * @returns {string}
+ */
+export function repeatedCallMessage(call, retryUrl) {
+  return [
+    'NOT SENT',
+    `You already sent ${call.method} ${call.url} in this conversation and it failed.`,
+    'The result will not be different this time, so it was not sent again.',
+    '',
+    // Last and imperative, for the reason recorded throughout BUILD_LOG: on this
+    // model size the closing line is acted on and the middle of a message is not.
+    retryUrl
+      ? `NEXT STEP: call the tool again with exactly this URL: ${retryUrl}`
+      : 'NEXT STEP: try a different URL, or use the wiki tool with a plain search term, or tell the user you could not fetch it.',
+  ].join('\n');
+}
+
+/**
  * Notice shown when the agent stops because the turn ran out of room.
  *
  * Refusals are reported separately from sent requests: telling a user who

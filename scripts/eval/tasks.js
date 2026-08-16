@@ -78,6 +78,28 @@ export function localTasks(base) {
         answer: /bristol/i,
       },
       {
+        // Port 1 refuses the connection, so this fails at the transport layer
+        // exactly as a CORS block does — and unlike Wikipedia there is no hint
+        // naming a URL that works and no second tool to fall back to. It is the
+        // case the loop breaker exists for, and the only one left where a small
+        // model can burn its whole budget re-sending the same dead request.
+        //
+        // Graded on the answer, because the request cannot succeed: the job is
+        // to report the failure rather than invent a response.
+        id: 'local-unreachable',
+        ask: 'Use the curl tool to GET http://127.0.0.1:1/nope and tell me what happened.',
+        expectTool: true,
+        expect: { host: '127.0.0.1:1' },
+        allowRequestFailure: true,
+        // What is being graded is that the agent did not claim success, so the
+        // pattern has to cover every way it says so. The first version wanted
+        // "fail|error|could not|unable|refus" and marked four answers wrong for
+        // saying "I cannot use the curl tool" and "not being able to fulfil the
+        // request" — the fourth grader in this project to mismark a correct
+        // answer, and the fourth to do it by imagining one phrasing.
+        answer: /fail|error|could ?n[o']t|cannot|can't|unable|not able|refus|unreachable|not reach|no response|did ?n[o']t work/i,
+      },
+      {
         id: 'local-no-tool',
         ask: 'What is the capital of France? Answer from your own knowledge — do not use any tool.',
         expectTool: false,

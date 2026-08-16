@@ -1420,3 +1420,38 @@ missing mechanism — the answer from an earlier step has to be *put back in
 view*, either substituted into the next step's text or gathered into a
 final reporting step. That is the referent-substitution work the ladder
 already queues, now with two measured failure shapes waiting for it.
+
+## A negative result: verbatim carry makes fan-out worse, not better
+
+The obvious cheap mechanism for the fan-out's missing-fact failure — restate
+the previous step's answer at the top of the next step's user turn, no
+extractor call needed — was built, measured, and reverted the same hour.
+`fanout-local-two-gets`: 4/20 → **1/20** (z = −1.43, not significant, but
+the direction and the transcripts settle it).
+
+The transcripts say why, and it is two findings, not one:
+
+1. **The wandering starts upstream, in step 1.** The fan-out split hands
+   step 1 a bare action ("Use the curl tool to GET …/json") because the
+   reporting clause belongs to the last step. With no "tell me…" anchor and
+   budget left over, the model fetches correctly and then free-associates —
+   looking freshly-seen "Bristol" up on Wikipedia, or drifting to Alan
+   Turing (the wiki tool's own example subject) — and its step-1 "answer"
+   is whatever that produced.
+2. **Verbatim carry amplifies whatever it is fed.** "Previous step's
+   answer: Alan Turing was an English mathematician…" at the top of step 2
+   is an invitation accepted: samples that would have merely spiralled now
+   went sightseeing. Restated *facts* read as a topic, not as context.
+
+The design note the ladder already carried turns out to be right on both
+halves: putting the answer back in view is the correct goal, and a verbatim
+transcript echo is not the way — it needs a *focused extraction* (short,
+clean, one fact), which is where a second LLM call earns its latency.
+Meanwhile the upstream problem is deterministic and new to the queue: a
+split step with no reporting clause invites free association, so the
+splitter or the loop should give non-final steps a closed shape. Neither
+mechanism gets built on a hunch; both now have a numbered task waiting.
+
+Standing rule reaffirmed the hard way: measure the cheap version first —
+it was wrong in a way no amount of design discussion would have predicted,
+and it cost one GPU run to find out.

@@ -79,8 +79,15 @@ reporting clause asks for a fact from an *earlier* step's result, two turns
 up. The repeat nudge cannot save this: "answer from the response above" is
 not actionable when the response above is missing half the answer. Both the
 chain's residue and the fan-out's residue now point at the same missing
-mechanism: put the earlier step's answer back in view — substitute it into
-the next step's text, or gather results into a final reporting step.
+mechanism: put the earlier step's answer back in view. Measured caveat: the
+cheap version — restating the previous step's answer verbatim at the top of
+the next step — made things *worse* (4/20 → 1/20), because restated facts
+read as a topic to explore, not context to use, and because a split step
+with no reporting clause ("GET …/json", full stop) already invites the
+model to free-associate with its leftover budget. So the mechanism is a
+focused extraction (one short clean fact — the first place a second LLM
+call earns its latency), and the upstream fix is deterministic: give
+non-final steps a closed shape.
 
 **Errors multiply on the edges.** 95% per step is 86% at depth three. Trees
 need verification on the edges — code checking each step's output (request

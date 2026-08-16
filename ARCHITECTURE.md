@@ -22,6 +22,8 @@ src/
     toolcall.js     Parse, validate and normalise model output. Pure.
     prompts.js      All prompt text (mirrored in docs/prompts.md).
     loop.js         Iteration loop, cap, confirmation policy, repair round.
+    stream-filter.js What the streaming bubble may show: holds back <think>
+                    blocks and forming tool-call JSON. Pure, stateless.
   tools/
     curl.js         fetch wrapper: proxy, credentials, timeout, capped read,
                     error taxonomy, masking.

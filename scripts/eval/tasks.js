@@ -119,11 +119,17 @@ export function wikiTasks() {
   return {
     dev: [
       {
+        // The question must be answerable from what the page actually says.
+        // This task originally pointed at "Telephone" and asked who invented
+        // it — a fact that article's summary does not contain — so twenty
+        // correct fetches were scored as twenty wrong answers. `oracleUrl` and
+        // scripts/eval/verify-tasks.js exist because of that.
         id: 'wiki-telephone',
-        ask: 'Look up the Wikipedia article "Telephone" and tell me who is credited with inventing the telephone.',
+        ask: 'Look up the Wikipedia article "Alexander Graham Bell" and tell me what he is credited with patenting.',
         expectTool: true,
-        expect: { host, pathIncludes: 'telephone' },
-        answer: /bell/i,
+        expect: { host, pathIncludes: 'bell' },
+        answer: /telephone/i,
+        oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Alexander_Graham_Bell',
       },
       {
         id: 'wiki-clifton',
@@ -133,6 +139,7 @@ export function wikiTasks() {
         expectTool: true,
         expect: { host, pathIncludes: 'clifton' },
         answer: /brunel/i,
+        oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Clifton_Suspension_Bridge',
       },
       {
         // A control, not a product scenario: nobody types a REST URL. It
@@ -141,10 +148,11 @@ export function wikiTasks() {
         // find the endpoint at all. Supplying endpoints is only worth building
         // if the answer here is yes.
         id: 'wiki-given-api-url',
-        ask: 'Use the curl tool to GET https://en.wikipedia.org/api/rest_v1/page/summary/Telephone and then tell me who is credited with inventing the telephone.',
+        ask: 'Use the curl tool to GET https://en.wikipedia.org/api/rest_v1/page/summary/Clifton_Suspension_Bridge and then tell me which engineer designed it.',
         expectTool: true,
-        expect: { host, pathIncludes: 'summary/telephone' },
-        answer: /bell/i,
+        expect: { host, pathIncludes: 'summary/clifton' },
+        answer: /brunel/i,
+        oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Clifton_Suspension_Bridge',
       },
       {
         id: 'wiki-no-tool',
@@ -160,6 +168,7 @@ export function wikiTasks() {
         expectTool: true,
         expect: { host, pathIncludes: 'bristol' },
         answer: /avon/i,
+        oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Bristol',
       },
       {
         id: 'wiki-marie-curie',
@@ -167,6 +176,7 @@ export function wikiTasks() {
         expectTool: true,
         expect: { host, pathIncludes: 'curie' },
         answer: /polonium/i,
+        oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Marie_Curie',
       },
     ],
   };

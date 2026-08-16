@@ -1262,3 +1262,36 @@ here the user's own sentence is the plan, and the split is a regex. A
 planner LLM only becomes worth its latency when asks stop carrying their
 structure on their surface — that is the informal-interpreter experiment,
 which now has a working substrate to plug into.
+
+## Checkpoint: holdout after the chain-driver, and a documentation pass
+
+With Phase 1–3a all merged, the holdout suites got their checkpoint run from
+main (`14cf2ea`): **220/220 = 100%, clean** — all eleven tasks, both suites,
+including `local-json-other-field` (the task that spent itself exposing the
+repeat bug) and the fresh `local-status-418`. No `repeat_ok` flags anywhere,
+consistent with the nudge capping what the model-mood run had let sprawl.
+Saved as `holdout-after-chain.json`.
+
+The state of the board, all measured this week at n=20 per task:
+
+| suite | rate |
+|---|---|
+| local dev (11 tasks, chains included) | 214/220 = 97% |
+| wiki dev (7 tasks) | 137/140 = 98% |
+| holdout (11 tasks, both suites) | 220/220 = 100% |
+| `chain-json-then-wiki` alone | 39/40 pooled, from 3/20 |
+
+The documentation pass that rode along: README's limitations said "one tool"
+(two shipped months of work ago) and quoted a 65–95% Wikipedia rate from
+before the wiki tool existed (98% now); the api-hints story still described
+fail-then-retry as the main lookup path when it has been the fallback since
+`wiki` landed; SPEC.md now says on its face that it is the original brief,
+kept as written, with README/ARCHITECTURE as current; and the agent-loop
+diagram is labelled as one *step*, with the splitter's outer walk described
+in prose above it.
+
+Remaining known headroom, in order: `memory-city-recall` 16–18/20 (parrot or
+apology instead of reading the transcript), `local-post-body` 18/20 (answers
+the status instead of the method), the repair prompt's wrong-tool example
+(queued behind a repro), and the two queued sampling/thinking experiments in
+`docs/research-notes.md`.

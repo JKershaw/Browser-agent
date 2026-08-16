@@ -1021,3 +1021,37 @@ was right about where the *regressions* came from, but "tool selection never
 went wrong" was too strong: it goes wrong at roughly 1 in 20 on a task whose
 data is already in the transcript. Small, real, and only visible because the
 holdout contained a task nobody had tuned against.
+
+## Stop the stream from showing what the message never says
+
+The mobile screenshot that started the wiki work showed a second defect that
+outlived it: raw `<think>` blocks and tool-call JSON streaming across the
+screen. The committed message was always cleaned — `stripThinking` on the text,
+a card in place of a tool call — but the *streamed* text was rendered raw, so
+for the length of the generation the user watched exactly the content the final
+message exists to hide.
+
+The fix is `src/agent/stream-filter.js`: `visibleStreamText(buffer)`, a pure
+function the chat pane applies to the whole accumulated buffer on every delta.
+Recomputing from scratch each time is what makes it safe — anything held back
+because it *might* be the start of a `<think>` tag or a tool call reappears the
+moment the next characters prove it is prose. Held back permanently: think
+blocks (closed or still open) and any JSON object, bare or fenced, whose first
+key is consistent with `"tool"` so far. Held back for a frame or two: a trailing
+`<thi`, a fence opener with no content yet. `{{credential}}` placeholders,
+`{"data": 1}`, and prose code fences stay visible, and a trailing ``` is only
+stripped when fence parity says it is an opener rather than the closer of a
+complete block.
+
+While everything so far is suppressed the bubble says *thinking…* instead of
+sitting empty behind a caret, and a cancelled think-only stream now leaves no
+empty "(interrupted)" husk — settlement judges the stream by what was
+*displayed*, not what arrived.
+
+Verification is the part worth recording. The unit tests (25) include
+character-by-character replays asserting no *frame* ever leaks a fragment; the
+e2e tests (4, `tests/e2e/streaming.spec.js`) install a MutationObserver before
+sending and assert over every recorded DOM frame afterwards, so the check is
+deterministic rather than a race against 8 ms deltas. And before trusting the
+green, the fix was stashed and the suite re-run against the unfixed pane: all
+four e2e tests failed, as they should. 737 unit / 82 e2e on the gate.

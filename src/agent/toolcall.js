@@ -75,11 +75,14 @@ export function stripThinking(text) {
  * Scan forward from `start` (which must index a `{`) and return the index just
  * past the matching `}`, respecting JSON string literals and escapes.
  *
+ * Exported for `stream-filter.js`, which needs the same "where does this
+ * object end" answer to suppress a tool call from the streaming display.
+ *
  * @param {string} s
  * @param {number} start
  * @returns {number} End index (exclusive), or -1 if unbalanced.
  */
-function matchBalanced(s, start) {
+export function matchBalanced(s, start) {
   let depth = 0;
   let inString = false;
   let escaped = false;

@@ -10,6 +10,7 @@
  */
 
 import { MASK, isMixedContent, maskHeaders, maskSecrets, previewHeaders } from '../tools/curl.js';
+import { visibleStreamText } from '../agent/stream-filter.js';
 import { clear, disclosure, el, formatMs, prettyJson } from './dom.js';
 
 /**
@@ -91,11 +92,23 @@ export function createChatPane(root) {
       return add(streaming);
     },
 
-    /** @param {string} delta */
+    /**
+     * Append a streamed chunk and re-render the bubble.
+     *
+     * The bubble shows `visibleStreamText(buffer)`, not the raw buffer: raw
+     * streaming put `<think>` blocks and tool-call JSON on screen (seen in a
+     * real user's screenshot) — content the committed message never contains.
+     * While everything so far is held back, the bubble says it is thinking
+     * rather than sitting empty behind a caret.
+     *
+     * @param {string} delta
+     */
     pushDelta(delta) {
       if (!streaming) this.beginStream();
       streamBuffer += delta;
-      streaming.querySelector('.msg-body').textContent = streamBuffer;
+      const visible = visibleStreamText(streamBuffer);
+      streaming.querySelector('.msg-body').textContent = visible;
+      streaming.classList.toggle('msg-thinking', visible === '');
       autoScroll();
     },
 
@@ -123,7 +136,11 @@ export function createChatPane(root) {
     settleStream() {
       if (!streaming) return;
       streaming.querySelector('.caret')?.remove();
-      if (streamBuffer.trim() === '') streaming.remove();
+      streaming.classList.remove('msg-thinking');
+      // Judged on what was *displayed*, not what arrived: a stream that was
+      // nothing but a suppressed <think> block leaves an empty bubble, and an
+      // empty bubble marked "interrupted" is a shrug rendered in HTML.
+      if (visibleStreamText(streamBuffer) === '') streaming.remove();
       else streaming.classList.add('msg-interrupted');
       streaming = null;
       streamBuffer = '';
@@ -143,7 +160,7 @@ export function createChatPane(root) {
       if (!streaming) return this.addAssistantMessage(text, meta);
       streaming.querySelector('.caret')?.remove();
       streaming.querySelector('.msg-body').textContent = text;
-      streaming.classList.remove('msg-repair');
+      streaming.classList.remove('msg-repair', 'msg-thinking');
       streaming.querySelector('.msg-tag')?.remove();
       if (meta.parseError) {
         streaming.prepend(el('div', { class: 'msg-tag msg-tag-warn', text: 'tool call failed to parse' }));

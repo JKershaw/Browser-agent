@@ -13,8 +13,57 @@ you can host anywhere static.
   term instead of a URL.
 - **What it is for:** poking at APIs, fetching things, and seeing precisely what
   an agent is doing while it does it.
-- **What it is not:** a general assistant. The models that fit in a browser are
-  small. Keep the asks concrete.
+- **What it is not:** a general assistant. The default model is deliberately
+  tiny — Qwen3 at 0.6 billion parameters, thousands of times smaller than the
+  hosted assistants — because the point is what careful engineering can get
+  out of a model that runs free, private, and local. Keep the asks concrete.
+
+## The idea
+
+A model this small is genuinely limited in specific, measurable ways: it
+cannot hold a two-step plan, it copies example text literally, and it loses
+track of things said a few turns ago. This project treats that as an
+engineering constraint rather than a fight. The surrounding code carries the
+complexity, and the model is only ever handed one small, self-contained task
+at a time — one instruction, stated last, with the answer it needs already in
+view. Every mechanism in the app exists to keep the model inside that
+envelope, and everything measurable improved when work moved out of the
+model's head and into deterministic code.
+
+## What it can reliably do
+
+Each number comes from 20+ graded samples per task in the evaluation harness
+(`npm run eval`), not from impressions:
+
+| Ask it to… | Measured |
+|---|---|
+| Answer from its own knowledge, and *not* fetch when told not to | 100% |
+| Fetch a URL or API and report what came back | 97–100% |
+| Look something up on Wikipedia from casual phrasing | ~98% |
+| Follow an explicit chain — "fetch this, then look that up" | 95%+ (was 15% before the app started splitting these in code) |
+| Run two errands in one ask — "look up A and B and compare" | 85–95% via Wikipedia; still weak for two raw fetches, which is the current work |
+
+The full ladder — including the rungs that do not work yet, and a prompt to
+type in so you can feel each level yourself — is in
+[docs/capability-ladder.md](docs/capability-ladder.md).
+
+The numbers stay honest the boring way: hundreds of samples with confidence
+intervals, significance tests before believing any change, and held-out task
+sets so prompts cannot be tuned to their own exam. Failed experiments are
+written up in the [build log](BUILD_LOG.md) alongside the wins — reverting a
+plausible fix that measured worse is the system working, not a setback.
+
+## Where it is going
+
+Toward a network of these small sessions working together: a tree where each
+node only ever sees a leaf-sized problem, and code — not the model — handles
+the connections. Facts pass between steps explicitly, each step's output is
+verified and retried cheaply, and a sub-task can ask its caller a question
+without growing anyone's context. The design notes and the queue live at the
+bottom of the [capability ladder](docs/capability-ladder.md). If it holds,
+the payoff is a useful existence proof: reliable multi-step agent behaviour
+from a model small enough to run in a browser tab, with the reliability
+coming from architecture rather than model size.
 
 ---
 

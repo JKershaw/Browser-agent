@@ -374,18 +374,25 @@ export function wikiTasks() {
         // in its summary and would have rebuilt the wiki-telephone trap. The
         // oracle points at Clifton, whose summary contains the graded answer.
         //
-        // One honest caveat: the question names both bridges, so an answer can
-        // match /clifton/i by parroting the ask. `expectEach` means it only
-        // does so after both real fetches — read transcripts before believing
-        // a pass says the *comparison* happened.
+        // The answer bar is the *year*, not the name, because the name bar was
+        // tried first and fooled its grader: with `answer: /clifton/i` this
+        // task scored 20/20 while only ~4 samples actually said which bridge
+        // opened first — the rest described both bridges (the question supplies
+        // the word "Clifton" to parrot) or died at the iteration cap with a raw
+        // tool call as their last message, which also contains "Clifton". The
+        // fifth grader in this project to mismark, and the first to flatter.
+        // "1864" appears in neither the question nor any tool-call echo, only
+        // in the Clifton summary, so it demands the extraction. Residual hole,
+        // accepted: an answer giving 1864 while *attributing* it to the wrong
+        // bridge would still pass — read transcripts before trusting a jump.
         id: 'fanout-wiki-bridges',
-        ask: 'Look up the Wikipedia articles "Clifton Suspension Bridge" and "Tower Bridge" and tell me which of the two opened first.',
+        ask: 'Look up the Wikipedia articles "Clifton Suspension Bridge" and "Tower Bridge" and tell me which of the two opened first, and in which year it opened.',
         expectTool: true,
         expectEach: [
           { host, pathIncludes: 'clifton' },
           { host, pathIncludes: 'tower' },
         ],
-        answer: /clifton/i,
+        answer: /1864/,
         oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Clifton_Suspension_Bridge',
       },
     ],

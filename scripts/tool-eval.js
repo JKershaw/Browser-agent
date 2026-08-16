@@ -166,7 +166,7 @@ try {
       }
       const s = summarise(graded);
       results.push({ modelId, task: task.id, ...s, samples: graded });
-      console.log(`  ${task.id.padEnd(28)} ${pct(s)}  ${describe(s.counts)}`);
+      console.log(`  ${task.id.padEnd(28)} ${pct(s)}  ${describe(s.counts)}${repeatNote(s)}`);
       if (args.showFailures) showFailures(task.id, graded);
     }
 
@@ -344,7 +344,7 @@ async function regrade(file) {
     const now = summarise(graded);
     const was = { passes: r.passes, n: r.n };
     const moved = now.passes !== was.passes ? `  (was ${was.passes}/${was.n})` : '';
-    console.log(`  ${r.task.padEnd(28)} ${pct(now)}  ${describe(now.counts)}${moved}`);
+    console.log(`  ${r.task.padEnd(28)} ${pct(now)}  ${describe(now.counts)}${repeatNote(now)}${moved}`);
     if (args.showFailures) showFailures(r.task, graded);
     rows.push({ modelId: r.modelId, task: r.task, ...now, samples: graded });
   }
@@ -374,7 +374,8 @@ function report(rows) {
     );
     const all = {};
     for (const r of mine) for (const [k, v] of Object.entries(r.counts)) all[k] = (all[k] || 0) + v;
-    console.log(`  ${describe(all)}`);
+    const repeats = mine.reduce((a, r) => a + (r.repeatOk || 0), 0);
+    console.log(`  ${describe(all)}${repeatNote({ repeatOk: repeats })}`);
   }
 
   // The URLs it chose are the most useful thing on the page when a run goes
@@ -393,6 +394,15 @@ function report(rows) {
 /** @param {{rate: number, low: number, high: number}} s */
 function pct(s) {
   return `${(s.rate * 100).toFixed(0).padStart(3)}% (${(s.low * 100).toFixed(0)}–${(s.high * 100).toFixed(0)})`;
+}
+
+/**
+ * Note samples that re-sent an already-successful request. Not a grade — the
+ * sample usually still passes — but wasted budget worth seeing per run.
+ * @param {{repeatOk?: number}} s
+ */
+function repeatNote(s) {
+  return s.repeatOk ? `  repeat_ok×${s.repeatOk}` : '';
 }
 
 /** @param {Record<string, number>} counts */

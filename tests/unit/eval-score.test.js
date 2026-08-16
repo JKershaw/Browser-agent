@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { Grade, grade, matchesTarget, significance, summarise, verdict, wilson } from '../../scripts/eval/score.js';
+import { Grade, countRepeatedOk, grade, matchesTarget, significance, summarise, verdict, wilson } from '../../scripts/eval/score.js';
 
 /** A request as `state/log.js` records it, reduced to what the scorer reads. */
 function req(url, over = {}) {
@@ -196,6 +196,51 @@ describe('summarise', () => {
     expect(s.passes).toBe(2);
     expect(s.counts[Grade.WRONG_TARGET]).toBe(1);
     expect(s.rate).toBe(0.5);
+  });
+
+  it('counts samples that repeated a successful request, without failing them', () => {
+    const twice = { requests: [
+      { method: 'GET', url: 'http://h/json', status: 'ok' },
+      { method: 'GET', url: 'http://h/json', status: 'ok' },
+    ] };
+    const once = { requests: [{ method: 'GET', url: 'http://h/json', status: 'ok' }] };
+    const s = summarise([
+      { grade: Grade.OK, sample: twice },
+      { grade: Grade.OK, sample: once },
+    ]);
+    expect(s.repeatOk).toBe(1);
+    expect(s.passes).toBe(2);
+  });
+});
+
+describe('countRepeatedOk', () => {
+  it('is zero for distinct requests', () => {
+    expect(countRepeatedOk([
+      { method: 'GET', url: 'http://h/a', status: 'ok' },
+      { method: 'GET', url: 'http://h/b', status: 'ok' },
+    ])).toBe(0);
+  });
+
+  it('counts each redundant successful send', () => {
+    const r = { method: 'GET', url: 'http://h/json', status: 'ok' };
+    expect(countRepeatedOk([r, r, r, r])).toBe(3);
+  });
+
+  it('ignores failed sends — the loop breaker owns those', () => {
+    const dead = { method: 'GET', url: 'http://h/x', status: 'error' };
+    expect(countRepeatedOk([dead, dead, dead])).toBe(0);
+  });
+
+  it('treats a method change as a different request', () => {
+    expect(countRepeatedOk([
+      { method: 'GET', url: 'http://h/echo', status: 'ok' },
+      { method: 'POST', url: 'http://h/echo', status: 'ok' },
+    ])).toBe(0);
+  });
+
+  it('handles missing input', () => {
+    expect(countRepeatedOk(undefined)).toBe(0);
+    expect(countRepeatedOk([])).toBe(0);
   });
 });
 

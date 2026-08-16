@@ -159,6 +159,13 @@ Notes on the parts that are easy to get wrong:
   loop caps the assembled result message. The second exists because the status
   line, headers and truncation marker are added on top of the first, and because
   a different tool executor might not cap at all.
+- **Repeats are handled asymmetrically, per turn.** A request identical to one
+  that already *failed* is not sent again — the browser refuses identically
+  every time — and the model gets a `NOT SENT` message with a next step. A
+  repeat of a *successful* request is sent (the model may mean it; a second
+  POST is a real action), but from the second identical success the result ends
+  with an appended-after-truncation instruction to answer instead of fetching
+  again. Both memories reset between turns. See `docs/prompts.md` § Repeats.
 
 ## Tool-call contract
 

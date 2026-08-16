@@ -1055,3 +1055,56 @@ sending and assert over every recorded DOM frame afterwards, so the check is
 deterministic rather than a race against 8 ms deltas. And before trusting the
 green, the fix was stashed and the suite re-run against the unfixed pane: all
 four e2e tests failed, as they should. 737 unit / 82 e2e on the gate.
+
+## Nudge, don't block: repetition on successful requests
+
+The holdout's other lesson, addressed. A sample fetched the same URL four
+times, every request a success, and hit the iteration cap instead of answering.
+The loop breaker deliberately does not cover this — refusing to repeat a
+*successful* request would overrule the model about something it got right, and
+a second identical POST can be deliberate. So the fix is a nudge, not a wall:
+the repeat is sent, and from the second identical success the tool result ends
+with
+
+```text
+REPEAT: you have now sent this exact request 2 times. The response above is identical every time.
+NEXT STEP: answer the user in plain prose using the response above. Do not send this request again.
+```
+
+appended *after* truncation, so however large the response, the instruction is
+the last thing the model reads. The success memory is per-turn, like the
+failure map: "fetch it again" in a new turn is a fresh instruction, not a loop.
+
+Measurement first, as ever, and it did not go to plan. The harness now counts
+`repeat_ok` — samples that re-sent an already-successful request — and
+re-grading the saved holdout run reproduced the offline count exactly
+(`repeat_ok×8` on `local-json-other-field`, 40%). But two purpose-built dev
+twins failed to reproduce the phenomenon: `local-json-conditions` (same ask,
+string field) repeated 1/20, and `local-json-humidity` (camelCase numeric
+field, added to the payload for the purpose) repeated 0/20. Whatever triggers
+the re-fetch, it is not simply the field's shape, and it varies day to day: the
+same holdout task that repeated 8/20 in the checkpoint run repeated 2/20 when
+re-run before the fix.
+
+So the fix was measured on `local-json-other-field` itself, and that task is
+now **spent** — recorded as such in `tasks.js`, with `local-status-418` added
+as its fresh replacement. Both arms ran the same day, n=20 each:
+
+| arm | pass | samples repeating | chain lengths |
+|---|---|---|---|
+| holdout checkpoint (no nudge) | 18/20 | 8 | 2,2,2,2,2,2,3,4 |
+| before (no nudge, same day) | 20/20 | 2 | 2,3 |
+| after (nudge) | 20/20 | 7 | 2,2,2,2,2,2,2 |
+
+The rates are noise at these n, but the *mechanism* is not: without the nudge,
+3 of 10 repeating samples extended their chain past two sends (one to the cap
+and a failed turn); with it, 0 of 7 did. Reading the after-arm transcripts:
+the nudge fired in 7 samples, and in all 7 the very next assistant message was
+a plain answer. It cannot prevent the first repeat — it fires on it — but every
+chain it touched ended there.
+
+Unit coverage: five new loop tests (fires from the second success, survives
+truncation, silent for distinct requests and post-failure retries, forgets
+between turns) and the message's shape pinned in prompts.test.js. The repeat
+messages — this one and the loop breaker's — are now documented in
+`docs/prompts.md`, which had never mentioned the older of the two.

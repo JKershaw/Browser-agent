@@ -105,6 +105,33 @@ export function localTasks(base) {
         expectTool: false,
         answer: /paris/i,
       },
+      {
+        // Dev twin of the holdout's `local-json-other-field`, which caught the
+        // model re-fetching /json up to four times *successfully* and once
+        // hitting the iteration cap instead of answering (8/20 samples repeated
+        // a request they had already made). Iterating on the holdout task would
+        // spend it, so this asks for the third field of the same payload — the
+        // same shape, a different answer, and a task that has never been tuned
+        // against. The number to move is the repeat rate as much as the pass
+        // rate.
+        id: 'local-json-conditions',
+        ask: `Use the curl tool to GET ${base}/json and tell me the value of "conditions".`,
+        expectTool: true,
+        expect: { host, method: 'GET', pathIncludes: '/json' },
+        answer: /light rain/i,
+      },
+      {
+        // Second dev twin, added when the first under-reproduced: "conditions"
+        // repeated 1/20 against the holdout's 8/20 on "temperatureC". The
+        // remaining difference is the field's shape — camelCase and numeric
+        // rather than a readable word — so this asks for exactly that kind of
+        // field (added to the payload for the purpose).
+        id: 'local-json-humidity',
+        ask: `Use the curl tool to GET ${base}/json and tell me the value of "humidityPct".`,
+        expectTool: true,
+        expect: { host, method: 'GET', pathIncludes: '/json' },
+        answer: /\b87\b/,
+      },
     ],
     holdout: [
       // `local-headers` and `local-query` below were spent: a fix was measured
@@ -131,11 +158,27 @@ export function localTasks(base) {
         // Same URL as the most-practised dev task, different field. Reading the
         // right value out of a response it has seen twenty times is a different
         // skill from fetching it.
+        //
+        // SPENT: the repeat-on-success nudge was measured on this task, because
+        // it is the only task where the model repeats at a measurable rate
+        // (8/20 samples) and two purpose-built dev twins failed to reproduce it
+        // (1/20 and 0/20). Treat it as a dev task from here on;
+        // `local-status-418` below is its fresh replacement.
         id: 'local-json-other-field',
         ask: `Use the curl tool to GET ${base}/json and tell me the value of "temperatureC".`,
         expectTool: true,
         expect: { host, method: 'GET', pathIncludes: '/json' },
         answer: /\b14\b/,
+      },
+      {
+        // Fresh replacement for the spent `local-json-other-field` above.
+        // Never iterated against.
+        id: 'local-status-418',
+        ask: `Use the curl tool to GET ${base}/status/418 and tell me which status code the server responded with.`,
+        expectTool: true,
+        expect: { host, method: 'GET', pathIncludes: '/status/418' },
+        allowHttpError: true,
+        answer: /418/,
       },
       {
         // Restraint has now broken twice, both times as a side effect of

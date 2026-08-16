@@ -198,6 +198,29 @@ export function repeatedCallMessage(call, retryUrl) {
 }
 
 /**
+ * Appended to a tool result when the model re-sends a request that already
+ * succeeded this turn.
+ *
+ * Unlike {@link repeatedCallMessage} the request *was* sent — refusing to
+ * repeat a successful request would be the harness overruling the model about
+ * something it got right, and a second identical POST can be deliberate. This
+ * is a nudge, not a wall: the holdout caught a sample fetching the same URL
+ * four times, each one a success, until the iteration cap ended the turn with
+ * no answer. The model does not need the data again; it needs to be told,
+ * after the data, that the next move is to answer.
+ *
+ * @param {number} times How many times this exact request has now succeeded.
+ * @returns {string}
+ */
+export function repeatedSuccessMessage(times) {
+  return [
+    `REPEAT: you have now sent this exact request ${times} times. The response above is identical every time.`,
+    // Last and imperative, as ever: the closing line is the one acted on.
+    'NEXT STEP: answer the user in plain prose using the response above. Do not send this request again.',
+  ].join('\n');
+}
+
+/**
  * Notice shown when the agent stops because the turn ran out of room.
  *
  * Refusals are reported separately from sent requests: telling a user who

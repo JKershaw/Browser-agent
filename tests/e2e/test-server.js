@@ -80,7 +80,7 @@ export async function startTargetServer(port = 0) {
 
     switch (true) {
       case url.pathname === '/json':
-        send(200, { city: 'Bristol', temperatureC: 14, conditions: 'light rain' });
+        send(200, { city: 'Bristol', temperatureC: 14, conditions: 'light rain', humidityPct: 87 });
         return;
 
       case url.pathname === '/big': {

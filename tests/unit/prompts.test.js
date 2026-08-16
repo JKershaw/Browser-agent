@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { END, START, replaceMirror } from '../../scripts/sync-prompt-docs.js';
-import { buildSystemPrompt, capMessage, denialMessage, repeatedCallMessage, toolResultMessage } from '../../src/agent/prompts.js';
+import { buildSystemPrompt, capMessage, denialMessage, repeatedCallMessage, repeatedSuccessMessage, toolResultMessage } from '../../src/agent/prompts.js';
 
 /**
  * SPEC §10 calls prompt text load-bearing, and it is: small models follow the
@@ -189,6 +189,17 @@ describe('repeatedCallMessage', () => {
     const last = repeatedCallMessage(call).trim().split('\n').pop();
     expect(last).toMatch(/^NEXT STEP:/);
     expect(last).toMatch(/wiki tool with a plain search term/);
+  });
+});
+
+describe('repeatedSuccessMessage', () => {
+  it('names the repeat count and ends with the instruction to answer', () => {
+    const m = repeatedSuccessMessage(2);
+    expect(m).toContain('2 times');
+    // The closing line is the one this model size acts on.
+    expect(m.trim().split('\n').pop()).toBe(
+      'NEXT STEP: answer the user in plain prose using the response above. Do not send this request again.'
+    );
   });
 });
 

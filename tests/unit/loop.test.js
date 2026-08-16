@@ -471,6 +471,85 @@ describe('agent loop — repeating a request that already failed', () => {
     expect(confirm).toHaveBeenCalledTimes(1);
   });
 
+  it('nudges from the second identical success onward, but still sends', async () => {
+    // A holdout sample fetched the same URL four times, each a success, and
+    // ran out of iterations instead of answering. The repeat is sent — the
+    // model may mean it — but from the second success the result ends with the
+    // instruction to answer.
+    const exec = vi.fn(async () => okResult());
+    const { loop } = makeLoop({
+      script: [toolCall('https://fine.test/a'), toolCall('https://fine.test/a'), toolCall('https://fine.test/a'), 'done'],
+      executeTool: exec,
+    });
+
+    const r = await loop.run('go');
+
+    expect(exec).toHaveBeenCalledTimes(3);
+    const tools = r.transcript.filter((m) => m.role === 'tool');
+    expect(tools[0].content).not.toContain('REPEAT:');
+    expect(tools[1].content).toContain('you have now sent this exact request 2 times');
+    expect(tools[2].content).toContain('you have now sent this exact request 3 times');
+    // Last line and imperative, like every other remedy in this project.
+    expect(tools[1].content.trim().split('\n').pop()).toBe(
+      'NEXT STEP: answer the user in plain prose using the response above. Do not send this request again.'
+    );
+  });
+
+  it('places the nudge after truncation, so it survives a huge response', async () => {
+    const exec = vi.fn(async () => okResult('x'.repeat(50_000)));
+    const { loop } = makeLoop({
+      script: [toolCall('https://fine.test/a'), toolCall('https://fine.test/a'), 'done'],
+      executeTool: exec,
+      settings: { maxBytes: 1000 },
+    });
+
+    const r = await loop.run('go');
+    const second = r.transcript.filter((m) => m.role === 'tool')[1];
+    expect(second.content.trim().split('\n').pop()).toContain('NEXT STEP: answer the user');
+  });
+
+  it('does not nudge distinct successes', async () => {
+    const { loop } = makeLoop({
+      script: [toolCall('https://fine.test/a'), toolCall('https://fine.test/b'), 'done'],
+    });
+
+    const r = await loop.run('go');
+    for (const m of r.transcript.filter((t) => t.role === 'tool')) {
+      expect(m.content).not.toContain('REPEAT:');
+    }
+  });
+
+  it('does not nudge a retry that follows a failure', async () => {
+    // First send fails, second (different URL) succeeds: no nudge anywhere —
+    // the success count starts at the first success, not the first attempt.
+    const exec = vi.fn(async (call) =>
+      call.args.url.includes('dead') ? failed() : okResult()
+    );
+    const { loop } = makeLoop({
+      script: [toolCall('https://dead.test/a'), toolCall('https://fine.test/a'), 'done'],
+      executeTool: exec,
+    });
+
+    const r = await loop.run('go');
+    for (const m of r.transcript.filter((t) => t.role === 'tool')) {
+      expect(m.content).not.toContain('REPEAT:');
+    }
+  });
+
+  it('forgets successes between turns', async () => {
+    // "Fetch it again" in a new turn is a fresh instruction from the user, not
+    // a loop. The memory is per turn, same as the failure map.
+    const { loop } = makeLoop({
+      script: [toolCall('https://fine.test/a'), 'done', toolCall('https://fine.test/a'), 'done again'],
+    });
+
+    await loop.run('first');
+    const r = await loop.run('second');
+    for (const m of r.transcript.filter((t) => t.role === 'tool')) {
+      expect(m.content).not.toContain('REPEAT:');
+    }
+  });
+
   it('forgets failures between turns', async () => {
     // A network that was down a minute ago may be up now. The memory is per
     // turn, because that is the span in which repeating is certainly useless.

@@ -937,3 +937,87 @@ rate that looks bad.
 Both arms above are re-graded from saved samples rather than re-run. That the
 harness stores every transcript is what made a grader fix cost seconds instead
 of GPU minutes.
+
+## Sharpening the instrument
+
+Seven things had cost time repeatedly. Six are now fixed, and the fixes are
+listed by the mistake that motivated them rather than by feature.
+
+**Four graders mismarked correct behaviour, all four the same way.** Each was a
+pattern written from one imagined phrasing which the model then declined to use,
+and fixing one meant re-running the model to re-earn samples already on disk. So
+`--regrade <file>` re-scores a saved run against the current task definitions
+with no browser, no GPU and no model, and `--show-failures` prints the requests
+and answers behind each failure — which is how every one of those bugs was
+actually found. The new rule: when a rate looks wrong, read what the model wrote
+before believing the number.
+
+**CI's gate is `test:coverage`, not `test`.** PR #9 went red on a threshold that
+`npm test` does not check. `npm run check` now runs exactly what CI runs.
+
+**Runs were compared from memory.** Result files recorded suite, n and
+temperature, but nothing about the code that produced them — and prompt text
+moves these numbers more than anything else. They now carry the git SHA, a dirty
+flag and a hash of the system prompt.
+
+**Getting a before-arm meant checking files out over the working tree.**
+`git checkout main -- src/agent/loop.js`, rebuild, measure, restore. It worked,
+and one slip would have silently compared the wrong things. `--dist <dir>` now
+serves a build from anywhere, so the old ref lives in its own worktree beside
+the new one.
+
+**`docs/prompts.md` was hand-maintained and drifted inside a single session** —
+at one point documenting a hint format (`Article_Title`) the code had already
+stopped producing, so the doc confidently described a bug that had been fixed.
+`npm run docs:prompts` regenerates it and a unit test fails if they diverge. The
+test was checked by breaking the doc on purpose first: a drift test that cannot
+detect drift is worse than none.
+
+**Full runs are ~35 minutes**, which is right for a gate and wrong for
+iterating. `--quick` takes the first three tasks.
+
+### The seventh: there was no unfitted evidence at all
+
+`local-query` and `local-headers` were spent as holdout back in the
+`NEXT STEP` work — a fix was measured on them, so they had been dev tasks in all
+but name ever since. Every rate in this log came from tasks that had been
+iterated against until they passed.
+
+Six fresh tasks now exist, none ever used for tuning: a PUT with a body, a 429,
+reading a different field out of the most-practised response, the Eiffel Tower
+in lower case with loose phrasing, and two restraint checks — restraint having
+now broken twice as a side effect of editing text about calling tools.
+
+### And the holdout finally ran
+
+**198/200 = 99% (95% CI 96–100%)** across ten tasks, six of which had never been
+used for tuning. The dev suites sit at 98% and 100%, so nothing here was fitted
+to its tasks — which is the first time this project has been able to say that
+with evidence rather than hope.
+
+| | rate |
+|---|---|
+| `local-put-echo`, `local-status-429`, `local-no-tool-arithmetic` | 100% |
+| `wiki-eiffel`, `wiki-no-tool-arithmetic`, `wiki-bristol`, `wiki-marie-curie` | 100% |
+| `local-headers`, `local-query` (the previously spent pair) | 100% |
+| `local-json-other-field` | 90% |
+
+`wiki-eiffel` matters most of the four wiki tasks: lower case, loosely phrased,
+and a subject the tool was never built against. The search hop absorbed it.
+
+The two failures are real rather than another mismarked grader, and both are
+worth keeping in view:
+
+- One fetched `/json` four times and hit the iteration cap. The loop breaker
+  does not cover this, deliberately: the requests **succeeded**, and refusing to
+  repeat a successful request would be the harness overruling the model about
+  something it got right. Repetition on success is a different problem.
+- One fetched `/json` twice, then searched Wikipedia for `temperatureC` — it had
+  the answer in hand and went looking for it elsewhere.
+
+That second one is a genuine tool-selection error, and it corrects a claim made
+two sections ago. "Adding the tool cost nothing; describing it cost everything"
+was right about where the *regressions* came from, but "tool selection never
+went wrong" was too strong: it goes wrong at roughly 1 in 20 on a task whose
+data is already in the transcript. Small, real, and only visible because the
+holdout contained a task nobody had tuned against.

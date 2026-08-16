@@ -6,6 +6,27 @@
  *     node scripts/tool-eval.js --suite local --n 10
  *     node scripts/tool-eval.js --suite wiki --n 20 --model Qwen3-1.7B-q4f16_1-MLC
  *     node scripts/tool-eval.js --suite all --holdout --json before.json
+ *     node scripts/tool-eval.js --suite wiki --quick --show-failures
+ *     node scripts/tool-eval.js --regrade before.json
+ *
+ * Flags beyond the obvious:
+ *
+ * - `--regrade <file>` re-scores a saved run against the *current* task
+ *   definitions, with no browser, no GPU and no model. Four graders in this
+ *   project have mismarked correct behaviour; this turns fixing one from minutes
+ *   of GPU time into seconds, and it is the right first move whenever a rate
+ *   looks wrong.
+ * - `--show-failures` prints the requests and answers behind each failure. Every
+ *   grader bug here was found by reading what the model actually wrote.
+ * - `--quick` takes the first three tasks of the suite, for iterating. The full
+ *   suite stays the gate.
+ * - `--dist <dir>` serves a build from somewhere other than `dist/`, which is
+ *   what makes an honest before/after possible: build an older ref into its own
+ *   directory and measure both arms without checking files out over your work.
+ *
+ * Result files record the git SHA, whether the tree was dirty, and a hash of the
+ * system prompt, because comparing two runs from memory is how a wrong
+ * conclusion becomes a recorded fact.
  *
  * Why this exists alongside `model-check.js`: that script scores a sample on
  * `iterations > 0`, so a well-formed request to the wrong host counts as a
@@ -27,11 +48,14 @@
 import { chromium } from 'playwright';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
+import { execSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { startStaticServer, startTargetServer } from '../tests/e2e/test-server.js';
 import { STORAGE_KEY } from '../src/state/settings.js';
 import { Grade, grade, summarise, wilson } from './eval/score.js';
 import { suite as pickSuite } from './eval/tasks.js';
+import { buildSystemPrompt } from '../src/agent/prompts.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROFILE = join(HERE, '..', '.playwright-profile');
@@ -41,12 +65,22 @@ const APP_PORT = 43117;
 const args = parseArgs(process.argv.slice(2));
 const MODELS = args.model.length ? args.model : ['Qwen3-0.6B-q4f16_1-MLC'];
 
-const app = await startStaticServer(APP_PORT);
+// Re-scoring saved samples needs no browser, no GPU and no model. Four graders
+// in this project have mismarked correct behaviour; each fix used to mean
+// re-running the model for minutes to re-earn samples we already had.
+if (args.regrade) {
+  await regrade(args.regrade);
+  process.exit(0);
+}
+
+const app = await startStaticServer(APP_PORT, args.dist || undefined);
 const target = await startTargetServer();
 const tasks = (() => {
   const s = pickSuite(args.suite, target.url);
   const chosen = args.holdout ? s.holdout : s.dev;
-  return args.task ? chosen.filter((t) => t.id === args.task) : chosen;
+  if (args.task) return chosen.filter((t) => t.id === args.task);
+  // A tight loop for iterating; the full suite stays the gate.
+  return args.quick ? chosen.slice(0, 3) : chosen;
 })();
 
 console.log(
@@ -132,7 +166,8 @@ try {
       }
       const s = summarise(graded);
       results.push({ modelId, task: task.id, ...s, samples: graded });
-      console.log(`  ${task.id.padEnd(20)} ${pct(s)}  ${describe(s.counts)}`);
+      console.log(`  ${task.id.padEnd(28)} ${pct(s)}  ${describe(s.counts)}`);
+      if (args.showFailures) showFailures(task.id, graded);
     }
 
     await page.close();
@@ -141,7 +176,27 @@ try {
   report(results);
 
   if (args.json) {
-    await writeFile(args.json, JSON.stringify({ suite: args.suite, holdout: args.holdout, n: args.n, temp: args.temp, results }, null, 2));
+    await writeFile(
+      args.json,
+      JSON.stringify(
+        {
+          suite: args.suite,
+          holdout: args.holdout,
+          n: args.n,
+          temp: args.temp,
+          // Which code produced this. Without it, two result files are two sets
+          // of numbers with no way to tell what differed — and comparing runs
+          // from memory is exactly how a wrong conclusion becomes a fact.
+          ...provenance(),
+          // Local tasks embed the target server's ephemeral port in their
+          // expectations, so re-grading needs the base URL this run used.
+          base: target.url,
+          results,
+        },
+        null,
+        2
+      )
+    );
     console.log(`Written to ${args.json}\n`);
   }
 } finally {
@@ -207,6 +262,95 @@ function runOnce(page, ask, preamble) {
   }, [ask, preamble]);
 }
 
+/**
+ * The code this run measured: git commit, whether the tree was dirty, and a
+ * hash of the system prompt.
+ *
+ * The prompt hash is separate from the SHA on purpose. Prompt text is the thing
+ * that moves these numbers most, and a hash makes "did the prompt change between
+ * these two files?" a comparison rather than a recollection.
+ *
+ * @returns {{gitSha: string, dirty: boolean, promptHash: string, at: string}}
+ */
+function provenance() {
+  const git = (cmd) => {
+    try {
+      return execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    } catch {
+      return '';
+    }
+  };
+  return {
+    gitSha: git('git rev-parse --short HEAD') || 'unknown',
+    dirty: git('git status --porcelain') !== '',
+    promptHash: createHash('sha256').update(buildSystemPrompt()).digest('hex').slice(0, 12),
+    at: new Date().toISOString(),
+  };
+}
+
+/**
+ * Print the answers behind the failures for one task.
+ *
+ * Every grader bug in this project was found by reading what the model actually
+ * wrote, and each time that meant a throwaway script. A rate says a task failed;
+ * only the text says whether the model or the pattern was wrong.
+ *
+ * @param {string} taskId
+ * @param {Array<{grade: string, sample: object}>} graded
+ * @param {number} [limit]
+ */
+function showFailures(taskId, graded, limit = 3) {
+  const bad = graded.filter((g) => g.grade !== Grade.OK).slice(0, limit);
+  for (const { grade: g, sample } of bad) {
+    console.log(`    ── ${taskId} · ${g}`);
+    for (const q of sample.requests || []) {
+      console.log(`       ${q.method} ${decodeURIComponent(q.url).slice(0, 100)} -> ${q.status}${q.httpStatus ? ' ' + q.httpStatus : ''}`);
+    }
+    console.log(`       answer: ${JSON.stringify(String(sample.answer || '').slice(0, 200))}`);
+  }
+}
+
+/**
+ * Re-score a saved result file against the current task definitions.
+ *
+ * @param {string} file
+ */
+async function regrade(file) {
+  const saved = JSON.parse(await readFile(file, 'utf8'));
+  if (!saved.base) {
+    console.error(
+      `\n${file} predates provenance recording and has no target base URL.\n` +
+        'Local tasks embed an ephemeral port in their expectations, so they cannot be\n' +
+        're-graded from it. Wiki tasks are unaffected; re-run to get a stampable file.\n'
+    );
+  }
+  const s = pickSuite(saved.suite, saved.base || 'http://127.0.0.1:0');
+  const byId = new Map([...s.dev, ...s.holdout].map((t) => [t.id, t]));
+
+  console.log(
+    `\nre-grading ${file}\n` +
+      `  recorded as: suite "${saved.suite}"${saved.holdout ? ' HOLDOUT' : ''}, n=${saved.n}, temp ${saved.temp}` +
+      `${saved.gitSha ? `, ${saved.gitSha}${saved.dirty ? '-dirty' : ''}, prompt ${saved.promptHash}` : ''}\n`
+  );
+
+  const rows = [];
+  for (const r of saved.results) {
+    const task = byId.get(r.task);
+    if (!task) {
+      console.log(`  ${r.task.padEnd(28)} SKIPPED — no task with this id any more`);
+      continue;
+    }
+    const graded = r.samples.map((x) => ({ grade: grade(task, x.sample), sample: x.sample }));
+    const now = summarise(graded);
+    const was = { passes: r.passes, n: r.n };
+    const moved = now.passes !== was.passes ? `  (was ${was.passes}/${was.n})` : '';
+    console.log(`  ${r.task.padEnd(28)} ${pct(now)}  ${describe(now.counts)}${moved}`);
+    if (args.showFailures) showFailures(r.task, graded);
+    rows.push({ modelId: r.modelId, task: r.task, ...now, samples: graded });
+  }
+  report(rows);
+}
+
 /** @param {object[]} rows */
 function report(rows) {
   if (rows.length === 0) return;
@@ -214,7 +358,7 @@ function report(rows) {
   console.log('model                       task                  n   pass   rate  95% CI');
   for (const r of rows) {
     console.log(
-      `${r.modelId.padEnd(27)} ${r.task.padEnd(20)} ${String(r.n).padStart(2)}  ${String(r.passes).padStart(4)}  ` +
+      `${r.modelId.padEnd(27)} ${r.task.padEnd(28)} ${String(r.n).padStart(2)}  ${String(r.passes).padStart(4)}  ` +
         `${(r.rate * 100).toFixed(0).padStart(4)}%  ${(r.low * 100).toFixed(0)}–${(r.high * 100).toFixed(0)}%`
     );
   }
@@ -262,7 +406,10 @@ function describe(counts) {
 
 /** @param {string[]} argv */
 function parseArgs(argv) {
-  const out = { suite: 'local', n: 10, temp: 0.6, model: [], json: '', holdout: false, task: '' };
+  const out = {
+    suite: 'local', n: 10, temp: 0.6, model: [], json: '', holdout: false, task: '',
+    regrade: '', showFailures: false, quick: false, dist: '',
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--holdout') out.holdout = true;
@@ -272,6 +419,10 @@ function parseArgs(argv) {
     else if (a === '--model') out.model.push(argv[++i]);
     else if (a === '--json') out.json = argv[++i];
     else if (a === '--task') out.task = argv[++i];
+    else if (a === '--regrade') out.regrade = argv[++i];
+    else if (a === '--show-failures') out.showFailures = true;
+    else if (a === '--quick') out.quick = true;
+    else if (a === '--dist') out.dist = argv[++i];
     else {
       console.error(`Unknown argument: ${a}`);
       process.exit(1);

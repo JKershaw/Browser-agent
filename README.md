@@ -246,11 +246,17 @@ Some deliberate properties:
 ## Testing
 
 ```bash
+npm run check          # everything CI runs — use this before pushing
 npm test               # unit tests (no browser needed)
 npm run test:coverage  # with the 90% coverage gate
 npm run test:e2e       # Playwright, against the built dist/index.html
 npm run test:e2e:real  # the same, driving the real Qwen3-0.6B model
+npm run docs:prompts   # regenerate the prompt mirror in docs/prompts.md
 ```
+
+**Use `npm run check` before pushing.** CI's gate is `test:coverage`, not
+`test`, so a change can add uncovered branches and pass `npm test` while turning
+CI red — which is exactly what happened when the wiki tool landed.
 
 Both e2e commands rebuild `dist/index.html` first, because they test the built
 artifact rather than the dev server. They start their own local servers, so
@@ -282,6 +288,8 @@ question about a *rate*:
 npm run eval -- --suite local --n 20     # hermetic: does it build the request it was given?
 npm run eval -- --suite wiki  --n 20     # real Wikipedia: can it find something?
 npm run eval -- --suite all --holdout    # the tasks not used for tuning
+npm run eval -- --suite wiki --quick --show-failures   # fast loop while iterating
+npm run eval -- --regrade results.json   # re-score saved samples, no GPU needed
 ```
 
 It grades the request the model actually built — not merely that it built one —
@@ -290,6 +298,37 @@ and `holdout` halves: iterate against dev, and check holdout only at
 checkpoints, because a prompt tuned until the tasks in front of it pass has been
 fitted to those tasks. Needs a GPU, and shares the real-model suite's browser
 profile so the weights are downloaded once.
+
+Whether a change is real is decided by a two-proportion z-test, not by eyeballing
+the rates. Comparing confidence intervals for overlap — the previous rule — is
+about p < 0.005 and threw away findings that were plainly real.
+
+**When a rate looks wrong, suspect the grader first.** Four of them here have
+mismarked correct behaviour, and all four did it the same way: an answer pattern
+written from one imagined phrasing that the model then declined to use. So:
+
+```bash
+npm run eval -- --regrade results.json --show-failures
+```
+
+`--show-failures` prints what the model actually wrote; `--regrade` re-scores
+saved samples against the current task definitions in seconds, with no browser
+and no GPU. Fix the pattern, re-grade, and only re-run the model if the samples
+genuinely cannot answer the question. Result files record the git SHA, a dirty
+flag and a hash of the system prompt, so two runs can be compared on evidence
+rather than recollection.
+
+To measure a change against the code that preceded it, build the old ref into
+its own directory and point the harness at it with `--dist`, rather than
+checking files out over your working tree:
+
+```bash
+git worktree add /tmp/before main && ln -s "$PWD/node_modules" /tmp/before/
+(cd /tmp/before && npm run build)
+npm run eval -- --suite wiki --task wiki-turing-open --n 20 --dist /tmp/before/dist
+npm run eval -- --suite wiki --task wiki-turing-open --n 20   # your build
+git worktree remove /tmp/before
+```
 
 ---
 

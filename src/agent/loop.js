@@ -9,7 +9,7 @@
  */
 
 import { parseToolCall, repairPrompt } from './toolcall.js';
-import { splitSteps } from './split.js';
+import { closeStep, splitSteps } from './split.js';
 import { describeCredentialUse } from '../tools/curl.js';
 import { buildSystemPrompt, capMessage, denialMessage, repeatedCallMessage, repeatedSuccessMessage, toolResultMessage } from './prompts.js';
 
@@ -249,7 +249,11 @@ export function createAgentLoop(deps) {
         const meta = steps.length > 1
           ? { step: { index: i, total: steps.length, original: String(userText) } }
           : undefined;
-        push('user', steps[i], meta);
+        // Non-final steps get a closed shape (see closeStep): a bare action
+        // step wanders on its leftover budget. The last step keeps the user's
+        // own reporting clause, whatever it is.
+        const isFinal = i === steps.length - 1;
+        push('user', isFinal ? steps[i] : closeStep(steps[i]), meta);
         reason = await runStep();
         if (reason !== StopReason.TEXT) break;
       }

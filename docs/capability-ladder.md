@@ -33,7 +33,7 @@ hold the structure itself.
 | 3 | **Recall across turns.** Use something fetched earlier without refetching. | Fetch something, chat a bit, then: "what city was that for again?" | 80–90% — the weakest measured rung; failures parrot or apologise instead of reading the transcript |
 | 4 | **Explicit chain.** "Do X, then do Y." | "GET this JSON to find the city, then look that city up on Wikipedia" — watch for the "step 2 of 2" marker | 95%+ (was 15% before the chain-driver; the residual failure is rung 3 wearing a trench coat: "that city" → "City") |
 | 5 | **Implicit chain.** Steps the user didn't spell out. | "What country is this weather API talking about?" (needs fetch → resolve → look up, unprompted) | Unmeasured; expected near zero unaided. Needs the interpreter. |
-| 6 | **Fan-out and compare.** "Look up A and B; which is older?" | "Look up the Wikipedia articles 'Clifton Suspension Bridge' and 'Tower Bridge' and tell me which of the two opened first, and in which year it opened." | Split by tool. Wiki: 85–95% — both legs fetched 20/20, both years reported with right attribution; failures are a repeat spiral eating the call budget, and no sample *states* the comparison, only the facts. Curl ("GET X and also GET Y"): was 0% unaided (second leg silently dropped 20/20); the conjunction split moved dispatch to 17/20 but the pass rate only to 20%, because the last step's reporting clause asks for a fact two turns up — rung 3 again, waiting on referent substitution. |
+| 6 | **Fan-out and compare.** "Look up A and B; which is older?" | "Look up the Wikipedia articles 'Clifton Suspension Bridge' and 'Tower Bridge' and tell me which of the two opened first, and in which year it opened." | Split by tool. Wiki: 85–95% — both legs fetched 20/20, both years reported with right attribution; failures are a repeat spiral eating the call budget, and no sample *states* the comparison, only the facts. Curl ("GET X and also GET Y"): was 0% unaided (second leg silently dropped 20/20); the conjunction split plus closed non-final steps moved dispatch to 20/20 and eliminated wandering, but the pass rate sits near 10–20%, because the answer needs a fact two turns up — rung 3 in its purest form, waiting on referent substitution. |
 | 7 | **Tree with clarification.** Sub-sessions that can ask their caller questions. | — | Design stage; see below. |
 
 The manual column is not decoration. Run it on the deployed app when a rung
@@ -86,8 +86,11 @@ read as a topic to explore, not context to use, and because a split step
 with no reporting clause ("GET …/json", full stop) already invites the
 model to free-associate with its leftover budget. So the mechanism is a
 focused extraction (one short clean fact — the first place a second LLM
-call earns its latency), and the upstream fix is deterministic: give
-non-final steps a closed shape.
+call earns its latency). The upstream fix is in: non-final steps get a
+closed shape (`closeStep` appends ", then tell me the result in one
+sentence." when a step does not say what to do with its result), which
+eliminated the wandering (wrong_target 4 → 0), pushed dispatch to 20/20,
+and left the recall failure standing alone for the extractor to move.
 
 **Errors multiply on the edges.** 95% per step is 86% at depth three. Trees
 need verification on the edges — code checking each step's output (request

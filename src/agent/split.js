@@ -64,6 +64,33 @@ const CONDITIONAL = /\b(?:if|when|whenever|unless|once)\b/i;
 const MAX_STEPS = 3;
 const MIN_STEP_LENGTH = 8;
 
+/** A reporting verb anywhere in a step: the step already says what to do
+ * with its result. Same verbs as {@link REPORTING}, unanchored. */
+const HAS_REPORTING = /\b(?:tell|say|report|answer|give|show|let\s+me\s+know|read|summari[sz]e|explain)\b/i;
+
+/**
+ * Give a step a closed shape: if it does not already say what to do with its
+ * result, append the reporting clause the suites measure at 100% when users
+ * write it themselves ("…, then tell me…").
+ *
+ * Measured reason: splitting "GET X and also GET Y, and tell me both" puts
+ * the reporting clause on the last step and leaves earlier ones bare — and a
+ * bare action step wanders. Samples fetched correctly, then spent their
+ * leftover budget looking freshly-seen words up on Wikipedia, and their
+ * step answer was whatever that produced. An open step invites the model to
+ * decide what "done" means; a closed one tells it.
+ *
+ * @param {string} step
+ * @returns {string}
+ */
+export function closeStep(step) {
+  const s = String(step ?? '');
+  if (!s.trim() || HAS_REPORTING.test(s)) return s;
+  return /[.!?]$/.test(s)
+    ? `${s} Then tell me the result in one sentence.`
+    : `${s}, then tell me the result in one sentence.`;
+}
+
 /**
  * Split a user message into sequential steps.
  *

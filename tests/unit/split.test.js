@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { splitSteps } from '../../src/agent/split.js';
+import { closeStep, splitSteps } from '../../src/agent/split.js';
 
 describe('splitSteps', () => {
   it('splits an explicit two-hop chain on ", then "', () => {
@@ -117,5 +117,31 @@ describe('splitSteps', () => {
     expect(splitSteps('')).toEqual(['']);
     expect(splitSteps(null)).toEqual(['']);
     expect(splitSteps(undefined)).toEqual(['']);
+  });
+});
+
+describe('closeStep', () => {
+  it('appends a reporting clause to a bare action step', () => {
+    expect(closeStep('Use the curl tool to GET http://a.test/json')).toBe(
+      'Use the curl tool to GET http://a.test/json, then tell me the result in one sentence.'
+    );
+  });
+
+  it('starts a new sentence when the step already ends with punctuation', () => {
+    expect(closeStep('Fetch http://a.test/one for me.')).toBe(
+      'Fetch http://a.test/one for me. Then tell me the result in one sentence.'
+    );
+  });
+
+  it('leaves a step alone when it already says what to report', () => {
+    const step = 'GET http://a.test/json and tell me the city it names';
+    expect(closeStep(step)).toBe(step);
+    const explain = 'Look up Alan Turing on Wikipedia and explain who he was';
+    expect(closeStep(explain)).toBe(explain);
+  });
+
+  it('leaves empty input alone', () => {
+    expect(closeStep('')).toBe('');
+    expect(closeStep(null)).toBe('');
   });
 });

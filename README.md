@@ -8,8 +8,9 @@ requests go out from your browser, and nothing you type is sent anywhere except
 in the HTTP calls you explicitly approve. The whole app is a single HTML file
 you can host anywhere static.
 
-- **What it is:** a chat window, an in-browser LLM, and exactly one tool — an
-  HTTP request builder ("curl").
+- **What it is:** a chat window, an in-browser LLM, and two tools — an HTTP
+  request builder (`curl`) and a Wikipedia lookup (`wiki`) that takes a search
+  term instead of a URL.
 - **What it is for:** poking at APIs, fetching things, and seeing precisely what
   an agent is doing while it does it.
 - **What it is not:** a general assistant. The models that fit in a browser are
@@ -102,6 +103,25 @@ is the right thing to attach to a bug report.
 
 The **stats bar** shows the current model, prefill and decode speed, tokens used,
 the last request's latency, and a live iteration counter.
+
+### The two tools
+
+`curl` makes one HTTP request. Give the agent a URL and it will build the call.
+
+`wiki` looks something up on Wikipedia from a **search term** rather than a URL —
+"Alan Turing", not `https://en.wikipedia.org/…`. It resolves the term to a real
+article title and fetches the summary, and both of its requests appear on the
+confirmation card and in the log like any other.
+
+It exists for a measured reason. Asked to look something up, a 0.6B model gets
+the *article title* right almost every time and the URL around it wrong most of
+the time — and when handed a working URL to retry with, it tends to graft half
+of it onto half of its own. Asking only for the search term removes the part it
+cannot do. The [build log](BUILD_LOG.md) has the before-and-after rates and the
+failure breakdown behind that claim.
+
+The general lesson, which is the one worth reusing: give a small model the
+simplest interface that can express what it wants, and do the rest in code.
 
 ### Keyboard
 

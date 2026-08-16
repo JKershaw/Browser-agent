@@ -176,7 +176,14 @@ export function wikiTasks() {
         ask: 'Look up Alan Turing on Wikipedia and tell me about his life.',
         expectTool: true,
         expect: { pathIncludes: 'turing' },
-        answer: /mathematician|computer scientist|cryptanalyst|logician|turing machine/i,
+        // Every descriptor the summary actually offers. An earlier version of
+        // this regex wanted "computer scientist" and the model wrote "father of
+        // theoretical computer science" — the source says both, so the answer
+        // was right and the grader was wrong. That is the third grader in this
+        // project to mismark a faithful answer, so the rule is now: enumerate
+        // what the source supports by reading the source, never by reading the
+        // failures.
+        answer: /mathematician|computer scien|cryptanalyst|logician|philosopher|biologist|turing machine/i,
         oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Alan_Turing',
       },
       {
@@ -201,7 +208,10 @@ export function wikiTasks() {
         ask: 'Use the curl tool to GET https://wikipedia.org/wiki/Alan_Turing and tell me what Alan Turing is described as.',
         expectTool: true,
         expect: { pathIncludes: 'turing' },
-        answer: /mathematician|computer scientist|cryptanalyst|logician/i,
+        // Same enumeration as wiki-turing-open, and for the same reason: seven
+        // of this task's twenty samples were marked wrong for answering "father
+        // of theoretical computer science", which is what the article says.
+        answer: /mathematician|computer scien|cryptanalyst|logician|philosopher|biologist/i,
         oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Alan_Turing',
       },
       {

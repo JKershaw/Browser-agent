@@ -9,6 +9,8 @@
 
 import { createAgentLoop } from './agent/loop.js';
 import { executeCurl, formatResultForModel } from './tools/curl.js';
+import { executeWiki, formatWikiForModel } from './tools/wiki.js';
+import { WIKI_TOOL } from './agent/toolcall.js';
 import { assertEngine, detectCapabilities } from './llm/engine.js';
 import { diagnoseLoadError } from './llm/load-error.js';
 import { createMockEngine } from './llm/mock.js';
@@ -94,7 +96,7 @@ export function createApp(opts = {}) {
     const entry = openEntry ?? log.start(call);
     openEntry = null;
     try {
-      const result = await executeCurl(call.args, {
+      const curlOpts = {
         fetchImpl: opts.fetchImpl,
         timeoutMs: s.timeoutMs,
         maxBytes: s.maxBytes,
@@ -102,7 +104,23 @@ export function createApp(opts = {}) {
         allowlist: s.allowlist,
         credentials: s.credentials,
         signal: ctx?.signal,
-      });
+      };
+
+      if (call.tool === WIKI_TOOL) {
+        const result = await executeWiki(call.args, curlOpts);
+        // The tool makes more than one request, and the log is a record of
+        // requests. Settling only the first would leave the article fetch
+        // invisible — a tool that quietly reaches the network more often than
+        // the log admits is exactly what this app exists not to be.
+        const [first, ...rest] = result.requests;
+        if (first) log.settle(entry.id, first);
+        for (const hop of rest) {
+          log.settle(log.start({ args: hop.request ?? { method: 'GET', url: '' } }).id, hop);
+        }
+        return result;
+      }
+
+      const result = await executeCurl(call.args, curlOpts);
       log.settle(entry.id, result);
       return result;
     } catch (e) {
@@ -130,7 +148,8 @@ export function createApp(opts = {}) {
   const loop = createAgentLoop({
     engine,
     executeTool,
-    formatResult: formatResultForModel,
+    formatResult: (result) =>
+      result?.tool === WIKI_TOOL ? formatWikiForModel(result) : formatResultForModel(result),
     getSettings: () => settings.get(),
     confirm: opts.confirm,
     hooks: {

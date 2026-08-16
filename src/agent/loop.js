@@ -9,6 +9,7 @@
  */
 
 import { parseToolCall, repairPrompt } from './toolcall.js';
+import { splitSteps } from './split.js';
 import { describeCredentialUse } from '../tools/curl.js';
 import { buildSystemPrompt, capMessage, denialMessage, repeatedCallMessage, repeatedSuccessMessage, toolResultMessage } from './prompts.js';
 
@@ -213,6 +214,16 @@ export function createAgentLoop(deps) {
   /**
    * Run one full turn for a user message.
    *
+   * The message is first split into sequential steps (`splitSteps`) — almost
+   * always exactly one. A multi-step ask runs each step as its own user turn
+   * in the shared transcript, so the model only ever holds the current step;
+   * this is the deterministic chain-driver, and the measured reason for it is
+   * in `split.js`. All steps share one tool budget, because the system prompt
+   * promises the model "at most N tool calls for one user message" and the
+   * harness keeps that promise. Any stop other than a plain text answer ends
+   * the whole turn — a step that was cancelled, capped or broken is not a
+   * foundation the next step can build on.
+   *
    * @param {string} userText
    * @returns {Promise<{stopReason: string, iterations: number, transcript: Array}>}
    */
@@ -231,8 +242,29 @@ export function createAgentLoop(deps) {
       maxIterations: clampIterations(settings0.maxIterations),
     });
 
-    push('user', String(userText));
+    try {
+      const steps = splitSteps(String(userText));
+      let reason = StopReason.TEXT;
+      for (let i = 0; i < steps.length; i += 1) {
+        const meta = steps.length > 1
+          ? { step: { index: i, total: steps.length, original: String(userText) } }
+          : undefined;
+        push('user', steps[i], meta);
+        reason = await runStep();
+        if (reason !== StopReason.TEXT) break;
+      }
+      return finish(reason);
+    } finally {
+      setState({ running: false, pendingConfirmation: null });
+    }
+  }
 
+  /**
+   * Run the generate → call → result loop for one step.
+   *
+   * @returns {Promise<string>} A {@link StopReason}.
+   */
+  async function runStep() {
     /**
      * Requests already sent this turn that failed, keyed by tool, method and
      * URL. A failed request is not worth repeating: the browser refuses it for
@@ -251,11 +283,10 @@ export function createAgentLoop(deps) {
      */
     const succeeded = new Map();
 
-    try {
-      // The +1 pass exists so the model can speak after its last tool result
-      // instead of the turn ending on a silent truncation.
-      for (let pass = 0; pass <= state.maxIterations; pass += 1) {
-        if (controller.signal.aborted) return finish(StopReason.CANCELLED);
+    // The +1 pass exists so the model can speak after its last tool result
+    // instead of the turn ending on a silent truncation.
+    for (let pass = 0; pass <= state.maxIterations; pass += 1) {
+        if (controller.signal.aborted) return StopReason.CANCELLED;
 
         const settings = getSettings();
         const systemPrompt = buildSystemPrompt({
@@ -269,14 +300,14 @@ export function createAgentLoop(deps) {
         try {
           parsed = await generateAndParse(toEngineMessages(transcript, systemPrompt), settings);
         } catch (e) {
-          if (controller.signal.aborted) return finish(StopReason.CANCELLED);
+          if (controller.signal.aborted) return StopReason.CANCELLED;
           emit('onNotice', { kind: 'error', text: `The model failed to generate a reply: ${e?.message || e}` });
-          return finish(StopReason.ENGINE_ERROR);
+          return StopReason.ENGINE_ERROR;
         }
 
         if (parsed.kind === 'text') {
           push('assistant', parsed.text);
-          return finish(StopReason.TEXT);
+          return StopReason.TEXT;
         }
 
         if (parsed.kind === 'error') {
@@ -286,13 +317,13 @@ export function createAgentLoop(deps) {
             kind: 'warning',
             text: `The model tried to call the tool but the call could not be parsed (${parsed.error.code}: ${parsed.error.message}). Its raw reply is shown above.`,
           });
-          return finish(StopReason.UNPARSEABLE);
+          return StopReason.UNPARSEABLE;
         }
 
         // --- a valid tool call ---
         if (state.iteration >= state.maxIterations) {
           emit('onNotice', { kind: 'info', text: capMessage(state.iteration, state.denials) });
-          return finish(StopReason.CAP);
+          return StopReason.CAP;
         }
 
         push('assistant', parsed.raw, { toolCall: parsed.call, prose: parsed.prose });
@@ -320,11 +351,11 @@ export function createAgentLoop(deps) {
         try {
           decision = await decide(parsed.call, settings);
         } catch (e) {
-          if (controller.signal.aborted) return finish(StopReason.CANCELLED);
+          if (controller.signal.aborted) return StopReason.CANCELLED;
           emit('onNotice', { kind: 'error', text: `The confirmation step failed: ${e?.message || e}. Nothing was sent.` });
-          return finish(StopReason.TOOL_ERROR);
+          return StopReason.TOOL_ERROR;
         }
-        if (controller.signal.aborted) return finish(StopReason.CANCELLED);
+        if (controller.signal.aborted) return StopReason.CANCELLED;
 
         if (!decision.approved) {
           // A refusal costs no iteration: the user denying three suggestions
@@ -342,14 +373,14 @@ export function createAgentLoop(deps) {
         try {
           result = await executeTool(parsed.call, { signal: controller.signal, settings });
         } catch (e) {
-          if (controller.signal.aborted) return finish(StopReason.CANCELLED);
+          if (controller.signal.aborted) return StopReason.CANCELLED;
           // The tool contract is to return an error object, never to throw, so
           // reaching here is a bug in the executor. Report it honestly instead
           // of letting run() reject with no stopReason and no onTurnEnd.
           emit('onNotice', { kind: 'error', text: `The tool crashed: ${e?.message || e}. The turn was stopped.` });
-          return finish(StopReason.TOOL_ERROR);
+          return StopReason.TOOL_ERROR;
         }
-        if (controller.signal.aborted) return finish(StopReason.CANCELLED);
+        if (controller.signal.aborted) return StopReason.CANCELLED;
         // Only transport failures are remembered. An HTTP 4xx/5xx is a real
         // answer from a reachable server, and re-requesting it can be perfectly
         // sensible — a 503 clears, a 429 stops rate-limiting.
@@ -369,12 +400,9 @@ export function createAgentLoop(deps) {
         });
       }
 
-      // Reachable when refusals (which cost no iteration) use up every pass.
-      emit('onNotice', { kind: 'info', text: capMessage(state.iteration, state.denials) });
-      return finish(StopReason.CAP);
-    } finally {
-      setState({ running: false, pendingConfirmation: null });
-    }
+    // Reachable when refusals (which cost no iteration) use up every pass.
+    emit('onNotice', { kind: 'info', text: capMessage(state.iteration, state.denials) });
+    return StopReason.CAP;
   }
 
   /** Generate once, and run at most one repair round on a parse failure. */

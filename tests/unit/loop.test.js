@@ -780,3 +780,96 @@ describe('agent loop — the model is told names, never values', () => {
     expect(exec).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('agent loop — multi-step asks (the chain-driver)', () => {
+  const CHAIN = 'Fetch http://a.test/one for the city please, then look that city up on Wikipedia please.';
+
+  it('runs a split ask as sequential user turns in one transcript', async () => {
+    const { loop, exec } = makeLoop({
+      script: [toolCall('http://a.test/one'), 'The city is Bristol.', toolCall('http://a.test/two'), 'It is in the United Kingdom.'],
+    });
+    const r = await loop.run(CHAIN);
+
+    expect(r.stopReason).toBe(StopReason.TEXT);
+    expect(exec).toHaveBeenCalledTimes(2);
+
+    const users = loop.transcript.filter((m) => m.role === 'user' && !m.content.startsWith('TOOL RESULT'));
+    expect(users).toHaveLength(2);
+    expect(users[0].content).toBe('Fetch http://a.test/one for the city please');
+    expect(users[1].content).toBe('look that city up on Wikipedia please.');
+    // The final answer is the last message, after both steps.
+    expect(loop.transcript.at(-1).content).toBe('It is in the United Kingdom.');
+  });
+
+  it('marks each step with its place in the plan and the original text', async () => {
+    const { loop } = makeLoop({ script: ['Step one done.', 'Step two done.'] });
+    await loop.run(CHAIN);
+    const users = loop.transcript.filter((m) => m.role === 'user');
+    expect(users[0].meta.step).toEqual({ index: 0, total: 2, original: CHAIN });
+    expect(users[1].meta.step).toEqual({ index: 1, total: 2, original: CHAIN });
+  });
+
+  it('attaches no step meta to a single-step ask', async () => {
+    const { loop } = makeLoop({ script: ['done'] });
+    await loop.run('What is the capital of France?');
+    const users = loop.transcript.filter((m) => m.role === 'user');
+    expect(users).toHaveLength(1);
+    expect(users[0].meta).toBeUndefined();
+  });
+
+  it('shares one tool budget across steps, keeping the system prompt honest', async () => {
+    // The system prompt promises "at most N tool calls for one user message";
+    // splitting must not quietly raise N. With a budget of 1, the second
+    // step's tool call caps the turn.
+    const { loop, exec } = makeLoop({
+      script: [toolCall('http://a.test/one'), 'one done.', toolCall('http://a.test/two'), 'never reached'],
+      settings: { maxIterations: 1 },
+    });
+    const r = await loop.run(CHAIN);
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(r.stopReason).toBe(StopReason.CAP);
+  });
+
+  it('does not run later steps after a non-text stop', async () => {
+    const engineError = () => {
+      throw new Error('engine died');
+    };
+    const { loop } = makeLoop({ script: [engineError, 'never reached'] });
+    const r = await loop.run(CHAIN);
+    expect(r.stopReason).toBe(StopReason.ENGINE_ERROR);
+    const users = loop.transcript.filter((m) => m.role === 'user');
+    expect(users).toHaveLength(1);
+  });
+
+  it('emits onTurnEnd exactly once for a split ask', async () => {
+    const ends = [];
+    const { loop } = makeLoop({
+      script: ['Step one done.', 'Step two done.'],
+      hooks: { onTurnEnd: (e) => ends.push(e) },
+    });
+    await loop.run(CHAIN);
+    expect(ends).toHaveLength(1);
+    expect(ends[0].stopReason).toBe(StopReason.TEXT);
+  });
+
+  it('resets the failed-request memory between steps of one ask', async () => {
+    // Per-step, as before the split existed: each step is its own turn from
+    // the loop-protection point of view, and a URL that failed in step one
+    // may legitimately be retried in step two.
+    const exec = vi.fn(async () => ({
+      ok: false,
+      status: 0,
+      error: { code: 'E_NETWORK', message: 'refused' },
+      elapsedMs: 1,
+    }));
+    const { loop } = makeLoop({
+      script: [toolCall('http://a.test/one'), 'gave up on one.', toolCall('http://a.test/one'), 'gave up again.'],
+      executeTool: exec,
+    });
+    const r = await loop.run(CHAIN);
+    expect(r.stopReason).toBe(StopReason.TEXT);
+    // Both sends actually went out — the second step was not blocked by the
+    // first step's failure memory.
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+});

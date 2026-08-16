@@ -1206,3 +1206,59 @@ yet:
 - **Queued:** the chain task with thinking mode on, purely to learn the
   ceiling the deterministic decomposition competes against (thinking triples
   round-trip latency, so it is calibration, not a candidate default).
+
+## The chain-driver: hold the plan in code, hand the model one step
+
+`chain-json-then-wiki` measured 3/20: given "fetch X, then look that city
+up", the model does hop one and answers hop two from recall. The fix follows
+the project thesis (and, it turns out, the plan-and-execute literature — see
+`docs/research-notes.md`): the model cannot hold a two-step plan, so nothing
+asks it to. `split.js` breaks an explicitly sequenced ask into steps in
+deterministic code, and the loop runs each step as its own user turn on the
+shared transcript. Step two arrives as a fresh instruction with hop one's
+result sitting right there in the transcript — the exact shape
+`memory-city-recall` measures at 90%. Zero new prompt text, zero new tokens
+on single-step asks.
+
+Design decisions, each with a reason:
+
+- **Splitting is conservative.** Only ", then" / "; then" / ". Then" /
+  " and then " between two actions splits. "then tell me…" is a reporting
+  clause — the answer format of the current step, not a new hop — and three
+  long-standing 100% tasks phrase themselves exactly this way, so it stays
+  attached. "if …, then …" is control flow: never split. A bare mid-clause
+  "then", more than three steps, or an under-8-character fragment abandons
+  the split.
+- **All steps share one tool budget**, because the system prompt promises
+  "at most N tool calls for one user message" and the harness keeps the
+  model's promises for it.
+- **Any stop other than a plain text answer ends the whole turn** — a capped
+  or cancelled step is not a foundation the next step can build on.
+- **The UI shows the user's message once, as typed.** Later steps render as
+  a quiet "step 2 of 2" marker: the user did not type that line, so it does
+  not get a user bubble.
+
+Measured (n=20 per run, temperature 0.6, Qwen3-0.6B):
+
+| suite / task | before | after |
+|---|---|---|
+| `chain-json-then-wiki` | 3/20 = 15% | 19/20 = 95%, then 20/20 in the regression run (39/40 pooled) |
+| local dev suite | 178/180 = 99% | 214/220 = 97% (two new tasks included) |
+| wiki dev suite | 137/140 = 98% | 137/140 = 98% |
+
+z = 5.09 on the headline. Mechanism, not just rate: **all 20 samples made
+both hops** — the one failure in the first run made its Wikipedia request but
+resolved "that city" to the literal word "City" and searched that. The cost
+is one extra generation round per chain: mean per-sample wall clock went
+3.6 s → 4.1 s. The regression dips are both pre-existing shapes, not the
+splitter: `local-post-body` 18/20 (answers the status instead of the method,
+same two-failure count as the previous run; its ", then tell me" phrasing
+correctly did not split), and `memory-city-recall` 16/20 against an 18/20
+baseline (not significant at this n, and it is the known parrot/apology
+failure the splitter never touches).
+
+What did not need building: a planner. ReWOO plans with a second model;
+here the user's own sentence is the plan, and the split is a regex. A
+planner LLM only becomes worth its latency when asks stop carrying their
+structure on their surface — that is the informal-interpreter experiment,
+which now has a working substrate to plug into.

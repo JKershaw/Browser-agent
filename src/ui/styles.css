@@ -219,6 +219,15 @@ body { display: flex; flex-direction: column; }
 .msg-tag { font-size: .72rem; color: var(--fg-muted); margin-bottom: .15rem; }
 .msg-tag-warn { color: var(--bad); font-weight: 600; }
 
+/* A step of a split multi-step ask: the agent working through the user's
+   plan. Quieter than a user bubble — the user did not type this line. */
+.msg-step {
+  align-self: flex-start;
+  border-left: 2px solid var(--border);
+  padding-left: .6rem;
+}
+.msg-step .msg-body { color: var(--fg-muted); font-size: .9rem; }
+
 .caret {
   display: inline-block;
   width: .5rem; height: 1rem;

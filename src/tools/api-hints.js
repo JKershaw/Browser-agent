@@ -28,45 +28,126 @@
  */
 
 /**
+ * A hint is a *function of the URL that failed*, not a fixed sentence.
+ *
+ * The first version handed the model a template — "use
+ * .../page/summary/Article_Title" — and a 0.6B model requested exactly that,
+ * `Article_Title` and all. It is the same failure as the `example.com/path` in
+ * our own schema example: a plausible-looking placeholder in front of a small
+ * model is something to copy, not something to fill in. So a hint names the
+ * real URL for the thing that was just asked for, and the model only has to
+ * copy it.
+ *
  * @typedef {object} ApiHint
  * @property {RegExp} test Matched against the failing request's hostname.
- * @property {string} hint One or two sentences naming a URL that does work.
+ * @property {(url: URL) => string|null} hint The advice, given the failed URL.
  */
 
 /** @type {ReadonlyArray<ApiHint>} */
 export const API_HINTS = Object.freeze([
   {
     test: /(^|\.)wikipedia\.org$/i,
-    hint:
-      'Wikipedia article pages (/wiki/…) block cross-origin requests, but its APIs allow them. ' +
-      'For a short summary use https://en.wikipedia.org/api/rest_v1/page/summary/Article_Title ' +
-      '(underscores for spaces, no /wiki/). For article text use ' +
-      'https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&prop=extracts&explaintext&titles=Article_Title ' +
-      '— the origin=* parameter is required.',
+    hint: (url) => {
+      const title = wikipediaTitle(url);
+      // "www" is three letters and is not a language: www.wikipedia.org is the
+      // portal, which has no article API at all. Anything unrecognised falls
+      // back to en, which at least exists.
+      const sub = /^([a-z]{2,3})\.(m\.)?wikipedia\.org$/i.exec(url.hostname)?.[1]?.toLowerCase();
+      const lang = !sub || sub === 'www' ? 'en' : sub;
+      if (!title) {
+        return (
+          `Wikipedia article pages block cross-origin requests; its REST API allows them. ` +
+          `The URL shape is https://${lang}.wikipedia.org/api/rest_v1/page/summary/ followed by ` +
+          `the article title with underscores for spaces.`
+        );
+      }
+      // The exact URL for what was just asked for. Nothing to fill in.
+      return (
+        `Wikipedia article pages block cross-origin requests; its REST API allows them. ` +
+        `Request this instead: https://${lang}.wikipedia.org/api/rest_v1/page/summary/${title}`
+      );
+    },
   },
   {
     test: /(^|\.)wikidata\.org$/i,
-    hint:
-      'Use the Wikidata API rather than the HTML pages: ' +
-      'https://www.wikidata.org/w/api.php?action=wbgetentities&format=json&origin=*&ids=Q42.',
+    hint: () =>
+      'Wikidata HTML pages block cross-origin requests; the API allows them, e.g. ' +
+      'https://www.wikidata.org/w/api.php?action=wbgetentities&format=json&origin=*&ids=Q42',
   },
   {
     test: /(^|\.)github\.com$/i,
-    hint:
-      'github.com pages block cross-origin requests; api.github.com allows them. ' +
-      'For example https://api.github.com/repos/owner/name for a repository, or ' +
-      'https://api.github.com/repos/owner/name/issues for its issues.',
+    hint: (url) => {
+      const repo = /^\/([^/]+)\/([^/]+)/.exec(url.pathname);
+      return repo
+        ? `github.com pages block cross-origin requests; api.github.com allows them. ` +
+          `Request this instead: https://api.github.com/repos/${repo[1]}/${repo[2]}`
+        : 'github.com pages block cross-origin requests; api.github.com allows them, e.g. ' +
+          'https://api.github.com/repos/owner/name';
+    },
   },
 ]);
 
 /**
- * The hint for a host, if there is one.
+ * The article title out of a Wikipedia URL, if there is one to find.
  *
- * @param {string} host A hostname, with or without a port.
+ * Handles the two forms a model reaches for — `/wiki/Title` and
+ * `/w/index.php?title=Title` — and returns null rather than a guess for
+ * anything else, because a wrong title produces a confident 404 and that is
+ * worse than admitting the shape.
+ *
+ * @param {URL} url
  * @returns {string|null}
  */
-export function apiHintFor(host) {
-  if (!host || typeof host !== 'string') return null;
-  const name = host.split(':')[0];
-  return API_HINTS.find((h) => h.test.test(name))?.hint ?? null;
+function wikipediaTitle(url) {
+  const fromPath = /^\/wiki\/(.+)$/.exec(url.pathname);
+  const raw = fromPath ? fromPath[1] : url.searchParams.get('title') || url.searchParams.get('search');
+  if (!raw) return null;
+  let decoded;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    decoded = raw;
+  }
+  const title = decoded.trim().replace(/\s+/g, '_');
+  return title && !title.includes('/') ? encodeURIComponent(title).replace(/%2F/gi, '') : null;
+}
+
+/**
+ * The hint for a failed request, if there is one.
+ *
+ * @param {URL|string} url The URL that failed.
+ * @returns {string|null}
+ */
+export function apiHintFor(url) {
+  let parsed;
+  try {
+    parsed = url instanceof URL ? url : new URL(String(url));
+  } catch {
+    return null;
+  }
+  const entry = API_HINTS.find((h) => h.test.test(parsed.hostname));
+  return entry ? entry.hint(parsed) || null : null;
+}
+
+/**
+ * The URL a hint recommends, on its own.
+ *
+ * Prose is for the user; this is for the model. Told in a paragraph to
+ * "request this instead: <url>", a 0.6B model changed the hostname and kept the
+ * path, or read the URL back to the user as advice — it never called the tool
+ * with it. What it needs is not a better sentence but a single unambiguous
+ * instruction in the position it attends to, and that needs the URL as a value
+ * rather than as a substring of English.
+ *
+ * @param {URL|string} url The URL that failed.
+ * @returns {string|null}
+ */
+export function retryUrlFor(url) {
+  const hint = apiHintFor(url);
+  if (!hint) return null;
+  const found = /https:\/\/\S+/.exec(hint.replace(/^[^:]*:\s*/, ''));
+  const candidate = found?.[0]?.replace(/[.,)]+$/, '') ?? null;
+  // Only a hint that names one concrete URL yields an instruction; the
+  // fallback "the URL shape is …" text deliberately does not.
+  return candidate && !/Article_Title|owner\/name|\/$/.test(candidate) ? candidate : null;
 }

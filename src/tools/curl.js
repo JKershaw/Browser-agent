@@ -10,7 +10,7 @@
  */
 
 import { ALLOWED_METHODS, ALLOWED_SCHEMES } from '../agent/toolcall.js';
-import { apiHintFor } from './api-hints.js';
+import { apiHintFor, retryUrlFor } from './api-hints.js';
 
 /**
  * Distinct failure modes. Each maps to its own user-facing explanation; see
@@ -492,7 +492,7 @@ function explain(kind, ctx) {
         // this names a URL that would work, and a reader who stops after one
         // sentence should have been given the useful one. The same lesson the
         // load-failure card learned: the decisive sentence must not be last.
-        apiHintFor(ctx.host),
+        apiHintFor(ctx.url),
         'The browser refused or could not complete the request, and it does not tell pages why.',
         'The usual cause is CORS: the target server did not send an Access-Control-Allow-Origin header that permits this page.',
         ctx.proxyConfigured
@@ -530,9 +530,10 @@ function explain(kind, ctx) {
  * @param {object} meta
  */
 function failure(kind, ctx, elapsedMs, meta = {}) {
+  const retryUrl = kind === CurlError.NETWORK ? retryUrlFor(ctx.url) : null;
   return {
     ok: false,
-    error: { kind, message: explain(kind, ctx) },
+    error: { kind, message: explain(kind, ctx), ...(retryUrl ? { retryUrl } : {}) },
     elapsedMs,
     ...meta,
   };
@@ -689,7 +690,7 @@ export async function executeCurl(args, opts = {}) {
       }
       return failure(
         CurlError.NETWORK,
-        { proxyConfigured: request.proxied, host },
+        { proxyConfigured: request.proxied, url: target.href },
         elapsed(),
         { request, detail: String(e?.message || e) }
       );
@@ -779,6 +780,14 @@ export function formatResultForModel(result) {
       result.error.message,
       '',
       'This request did not reach the server (or its response was discarded). Do not claim it succeeded.',
+      // Last, and imperative. The prose above says the same thing and was
+      // ignored twenty times out of twenty: the model rewrote the URL, or read
+      // it back to the user as advice. The closing line is the one the model is
+      // closest to when it generates, which is why the "do not claim it
+      // succeeded" line above works.
+      ...(result.error.retryUrl
+        ? ['', `NEXT STEP: call the tool again with exactly this URL: ${result.error.retryUrl}`]
+        : []),
     ].join('\n');
   }
 

@@ -132,6 +132,32 @@ export function localTasks(base) {
         expect: { host, method: 'GET', pathIncludes: '/json' },
         answer: /\b87\b/,
       },
+      {
+        // From the probe ladder: a two-hop ask whose second hop the model
+        // silently drops. All three probe samples fetched /json, then answered
+        // "which country is Bristol in" from memory instead of looking it up —
+        // one said France, with exactly the confidence of a correct answer.
+        // `expect` pins the *second* hop (the Wikipedia request), so a sample
+        // that answers correctly from recall without making it still fails as
+        // wrong_target: the thing under test is the hop, not the fact.
+        id: 'chain-json-then-wiki',
+        ask: `Use the curl tool to GET ${base}/json to find out which city the weather is for, then look that city up on Wikipedia and tell me which country it is in.`,
+        expectTool: true,
+        expect: { host: 'en.wikipedia.org', pathIncludes: 'bristol' },
+        answer: /united kingdom|england/i,
+        oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Bristol',
+      },
+      {
+        // From the probe ladder: turn two refers back to turn one's result and
+        // says not to fetch. One probe sample answered by repeating the user's
+        // question verbatim — a failure shape nothing else catches. Graded on
+        // restraint first (any request is spurious), then on naming the city.
+        id: 'memory-city-recall',
+        preamble: [`Use the curl tool to GET ${base}/json and tell me the temperature.`],
+        ask: 'And what city was that for again? No need to fetch anything.',
+        expectTool: false,
+        answer: /bristol/i,
+      },
     ],
     holdout: [
       // `local-headers` and `local-query` below were spent: a fix was measured

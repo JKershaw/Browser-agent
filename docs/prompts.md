@@ -34,6 +34,7 @@ To call it, reply with ONLY a fenced JSON block and no other text:
 ```json
 {"tool": "curl", "args": {"method": "GET", "url": "https://example.com/path", "headers": {}, "body": null}}
 ```
+The URL in that example is a placeholder. Never send it. Use the URL the user gave you, character for character, including its host and port.
 
 Rules for the call:
 - "method" must be one of: GET, POST, PUT, PATCH, DELETE, HEAD.

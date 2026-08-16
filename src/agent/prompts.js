@@ -33,6 +33,14 @@ export function buildSystemPrompt(opts = {}) {
     '{"tool": "curl", "args": {"method": "GET", "url": "https://example.com/path", "headers": {}, "body": null}}',
     '```',
     '',
+    // The URL above is the most-copied string in this prompt. Measured on
+    // Qwen3-0.6B: asked to "fetch http://127.0.0.1:PORT/status/503", it sent
+    // https://example.com/status/503 — or plain https://example.com/path — in
+    // 17 samples out of 20. The same substitution produced the first failure
+    // this project's real-model suite ever showed. An example is something a
+    // small model copies, so the rule against copying it has to be stated.
+    'The URL in that example is a placeholder. Never send it. Use the URL the user gave you, character for character, including its host and port.',
+    '',
     'Rules for the call:',
     `- "method" must be one of: ${ALLOWED_METHODS.join(', ')}.`,
     '- "url" must be absolute and start with http:// or https://.',

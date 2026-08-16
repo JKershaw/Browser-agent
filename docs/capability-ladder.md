@@ -33,7 +33,7 @@ hold the structure itself.
 | 3 | **Recall across turns.** Use something fetched earlier without refetching. | Fetch something, chat a bit, then: "what city was that for again?" | 80–90% — the weakest measured rung; failures parrot or apologise instead of reading the transcript |
 | 4 | **Explicit chain.** "Do X, then do Y." | "GET this JSON to find the city, then look that city up on Wikipedia" — watch for the "step 2 of 2" marker | 95%+ (was 15% before the chain-driver; the residual failure is rung 3 wearing a trench coat: "that city" → "City") |
 | 5 | **Implicit chain.** Steps the user didn't spell out. | "What country is this weather API talking about?" (needs fetch → resolve → look up, unprompted) | Unmeasured; expected near zero unaided. Needs the interpreter. |
-| 6 | **Fan-out and compare.** "Look up A and B; which is older?" | "Look up the Wikipedia articles 'Clifton Suspension Bridge' and 'Tower Bridge' and tell me which of the two opened first, and in which year it opened." | Split by tool. Wiki: 85% — both legs fetched 20/20, both years reported with right attribution; failures are a repeat spiral eating the call budget, and no sample *states* the comparison, only the facts. Curl ("GET X and also GET Y"): 0% — the second leg is silently dropped 20/20 and the first response's status is parroted as the answer. |
+| 6 | **Fan-out and compare.** "Look up A and B; which is older?" | "Look up the Wikipedia articles 'Clifton Suspension Bridge' and 'Tower Bridge' and tell me which of the two opened first, and in which year it opened." | Split by tool. Wiki: 85–95% — both legs fetched 20/20, both years reported with right attribution; failures are a repeat spiral eating the call budget, and no sample *states* the comparison, only the facts. Curl ("GET X and also GET Y"): was 0% unaided (second leg silently dropped 20/20); the conjunction split moved dispatch to 17/20 but the pass rate only to 20%, because the last step's reporting clause asks for a fact two turns up — rung 3 again, waiting on referent substitution. |
 | 7 | **Tree with clarification.** Sub-sessions that can ask their caller questions. | — | Design stage; see below. |
 
 The manual column is not decoration. Run it on the deployed app when a rung
@@ -67,13 +67,20 @@ parent should substitute the actual answer into the next step's text ("look
 **Bristol** up"), which needs a small answer-extraction step — the first
 place a focused second LLM call earns its latency.
 
-**Fan-out, measured, is two different problems.** The wiki tool's
-search-then-summary shape already keeps the model calling, so two subjects
-mostly work (85%); what breaks there is budget burned on redundant
-re-searches, a repeat/budget problem. Curl fan-out is the real gap (0%): one
-response in view reads as "done" and the second errand is silently dropped —
-so the candidate mechanism is deterministic, splitting "X and also Y" into
-two fed steps the way "then" asks already split, not prompt text.
+**Fan-out, measured, is two different problems — and dispatch is the solved
+one.** The wiki tool's search-then-summary shape already keeps the model
+calling, so two subjects mostly work (85–95%); what breaks there is budget
+burned on redundant re-searches. Curl fan-out was the real gap (0%): one
+response in view read as "done" and the second errand was silently dropped.
+The conjunction split (deterministic, in `split.js`: "and (also)" followed
+by an unmistakable action verb) fixed dispatch — both GETs now go out in
+17/20 — but only lifted the pass rate to 20%, because the last step's
+reporting clause asks for a fact from an *earlier* step's result, two turns
+up. The repeat nudge cannot save this: "answer from the response above" is
+not actionable when the response above is missing half the answer. Both the
+chain's residue and the fan-out's residue now point at the same missing
+mechanism: put the earlier step's answer back in view — substitute it into
+the next step's text, or gather results into a final reporting step.
 
 **Errors multiply on the edges.** 95% per step is 86% at depth three. Trees
 need verification on the edges — code checking each step's output (request

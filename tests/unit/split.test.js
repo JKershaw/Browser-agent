@@ -70,6 +70,45 @@ describe('splitSteps', () => {
     expect(splitSteps(ask)).toEqual([ask]);
   });
 
+  it('splits a fan-out on "and also" before a new action', () => {
+    const steps = splitSteps(
+      'Use the curl tool to GET http://127.0.0.1:9/json and also GET http://127.0.0.1:9/status/202, and tell me both the city and the status code you got.'
+    );
+    expect(steps).toEqual([
+      'Use the curl tool to GET http://127.0.0.1:9/json',
+      'GET http://127.0.0.1:9/status/202, and tell me both the city and the status code you got.',
+    ]);
+  });
+
+  it('splits a bare "and" when the next word is an action verb', () => {
+    expect(splitSteps('GET http://a.test/one and GET http://a.test/two for me please.')).toEqual([
+      'GET http://a.test/one',
+      'GET http://a.test/two for me please.',
+    ]);
+    expect(splitSteps('Look up Ada Lovelace on Wikipedia and look up Charles Babbage as well.')).toEqual([
+      'Look up Ada Lovelace on Wikipedia',
+      'look up Charles Babbage as well.',
+    ]);
+  });
+
+  it('leaves a plain-English "and" alone', () => {
+    // A title containing "and" is not two errands.
+    const title = 'Look up the Wikipedia article "War and Peace" and tell me who wrote it.';
+    expect(splitSteps(title)).toEqual([title]);
+    // Lowercase "get" is everyday English, not an HTTP method.
+    const chat = 'Open the fridge and get me a coffee while it loads.';
+    expect(splitSteps(chat)).toEqual([chat]);
+    // "and also" followed by a noun continues the reporting clause.
+    const report = 'GET http://a.test/json then tell me the city and also the temperature it lists.';
+    expect(splitSteps(report)).toEqual([report]);
+  });
+
+  it('keeps two named subjects of one lookup together', () => {
+    const ask =
+      'Look up the Wikipedia articles "Clifton Suspension Bridge" and "Tower Bridge" and tell me which of the two opened first, and in which year it opened.';
+    expect(splitSteps(ask)).toEqual([ask]);
+  });
+
   it('returns single-step asks untouched', () => {
     expect(splitSteps('What is the capital of France?')).toEqual(['What is the capital of France?']);
   });

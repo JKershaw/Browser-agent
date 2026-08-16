@@ -41,6 +41,28 @@ test('a two-step ask shows one user bubble, a step marker, and both tool calls',
   await expect(page.locator('.msg-assistant').last()).toContainText('United Kingdom');
 });
 
+test('an "and also" fan-out runs as two steps through the UI', async ({ open, target }) => {
+  const page = await open([
+    toolCall({ url: `${target.url}/json` }),
+    'The city is Bristol.',
+    toolCall({ url: `${target.url}/status/202` }),
+    'The city is Bristol and the status code was 202.',
+  ]);
+
+  await send(
+    page,
+    `GET ${target.url}/json and also GET ${target.url}/status/202, and tell me both the city and the status code.`
+  );
+  await page.locator('.confirm-card').getByRole('button', { name: 'Approve' }).click();
+  await page.locator('.confirm-card').getByRole('button', { name: 'Approve' }).click();
+  await settled(page);
+
+  await expect(page.locator('.msg-step .msg-tag')).toHaveText('step 2 of 2');
+  await expect(page.locator('.tool-card')).toHaveCount(2);
+  expect(target.received().map((r) => r.path)).toEqual(['/json', '/status/202']);
+  await expect(page.locator('.msg-assistant').last()).toContainText('202');
+});
+
 test('a single-step ask renders no step marker', async ({ open }) => {
   const page = await open(['Paris is the capital of France.']);
   await send(page, 'What is the capital of France?');

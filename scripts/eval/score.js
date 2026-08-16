@@ -163,16 +163,46 @@ export function wilson(successes, total, z = 1.96) {
 }
 
 /**
+ * How many requests in this sample repeated an identical, already-successful
+ * request — same method, same URL, both completing.
+ *
+ * Separate from the pass/fail grades because it usually is not a failure: the
+ * model re-fetches, gets the same bytes, and still answers correctly. It is
+ * wasted budget that occasionally becomes a capped turn (a holdout sample
+ * fetched the same URL four times and ran out of iterations), and it was
+ * invisible in the rates until a holdout failure exposed it.
+ *
+ * @param {Array<{method?: string, url?: string, status?: string}>} requests
+ * @returns {number} Count of redundant successful sends (0 when none).
+ */
+export function countRepeatedOk(requests) {
+  const seen = new Map();
+  let repeats = 0;
+  for (const r of requests || []) {
+    if (r?.status !== 'ok') continue;
+    const key = `${String(r.method || '').toUpperCase()} ${r.url}`;
+    const n = (seen.get(key) || 0) + 1;
+    seen.set(key, n);
+    if (n > 1) repeats += 1;
+  }
+  return repeats;
+}
+
+/**
  * Roll a list of graded samples up into counts and a pass rate.
  *
- * @param {Array<{grade: string}>} graded
- * @returns {{n: number, passes: number, counts: Record<string, number>, rate: number, low: number, high: number}}
+ * `repeatOk` — how many samples repeated an already-successful request — rides
+ * along so the waste is visible in every run, not only when it costs a pass.
+ *
+ * @param {Array<{grade: string, sample?: object}>} graded
+ * @returns {{n: number, passes: number, counts: Record<string, number>, repeatOk: number, rate: number, low: number, high: number}}
  */
 export function summarise(graded) {
   const counts = {};
   for (const g of graded) counts[g.grade] = (counts[g.grade] || 0) + 1;
   const passes = graded.filter((g) => PASSING.includes(g.grade)).length;
-  return { n: graded.length, passes, counts, ...wilson(passes, graded.length) };
+  const repeatOk = graded.filter((g) => countRepeatedOk(g.sample?.requests) > 0).length;
+  return { n: graded.length, passes, counts, repeatOk, ...wilson(passes, graded.length) };
 }
 
 /**

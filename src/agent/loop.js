@@ -10,7 +10,7 @@
 
 import { parseToolCall, repairPrompt } from './toolcall.js';
 import { describeCredentialUse } from '../tools/curl.js';
-import { buildSystemPrompt, capMessage, denialMessage, repeatedCallMessage, toolResultMessage } from './prompts.js';
+import { buildSystemPrompt, capMessage, denialMessage, repeatedCallMessage, repeatedSuccessMessage, toolResultMessage } from './prompts.js';
 
 /** Why a turn ended. @enum {string} */
 export const StopReason = Object.freeze({
@@ -241,6 +241,16 @@ export function createAgentLoop(deps) {
      */
     const failed = new Map();
 
+    /**
+     * Successful sends this turn, by the same key. A repeat here is *not*
+     * refused — the model may mean it, and a second POST is a real action —
+     * but from the second identical success onward the result carries a nudge
+     * to answer instead of fetching again. The holdout caught a turn spending
+     * its whole budget re-fetching a URL it had already read.
+     * @type {Map<string, number>}
+     */
+    const succeeded = new Map();
+
     try {
       // The +1 pass exists so the model can speak after its last tool result
       // instead of the turn ending on a silent truncation.
@@ -345,8 +355,15 @@ export function createAgentLoop(deps) {
         // sensible — a 503 clears, a 429 stops rate-limiting.
         if (!result.ok) failed.set(key, { retryUrl: result.error?.retryUrl });
 
+        const wins = result.ok ? (succeeded.get(key) || 0) + 1 : 0;
+        if (result.ok) succeeded.set(key, wins);
+
         emit('onToolResult', { call: parsed.call, result, iteration: state.iteration });
-        push('tool', truncateForModel(toolResultMessage(formatResult(result)), settings.maxBytes), {
+        // The nudge goes on *after* truncation, so however large the response,
+        // the last line the model reads is the instruction to answer.
+        let message = truncateForModel(toolResultMessage(formatResult(result)), settings.maxBytes);
+        if (wins >= 2) message += `\n\n${repeatedSuccessMessage(wins)}`;
+        push('tool', message, {
           call: parsed.call,
           result,
         });

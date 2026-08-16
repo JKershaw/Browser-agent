@@ -227,6 +227,41 @@ NEXT STEP: call the wiki tool again with one of those titles as the query.
 
 ---
 
+## Repeats
+
+Two different situations, two different messages — one refuses, one nudges.
+
+A request identical to one that already **failed** this turn is not sent again
+(`repeatedCallMessage()`); the browser refuses identically every time, so the
+loop is broken for it:
+
+```text
+TOOL RESULT
+NOT SENT
+You already sent GET https://wikipedia.org/wiki/Alan_Turing in this conversation and it failed.
+The result will not be different this time, so it was not sent again.
+
+NEXT STEP: try a different URL, or use the wiki tool with a plain search term, or tell the user you could not fetch it.
+```
+
+(When a working URL is known from a hint, the `NEXT STEP` names it instead.)
+
+A request identical to one that already **succeeded** this turn *is* sent — the
+model may mean it, and a second POST is a real action — but from the second
+identical success the result ends with `repeatedSuccessMessage()`, appended
+after truncation so it is the last thing the model reads however large the
+response:
+
+```text
+REPEAT: you have now sent this exact request 2 times. The response above is identical every time.
+NEXT STEP: answer the user in plain prose using the response above. Do not send this request again.
+```
+
+This exists because a holdout sample fetched the same URL four times, every one
+a success, and ran out of iterations instead of answering.
+
+---
+
 ## Denial
 
 When the user denies a request at the confirmation card (`denialMessage()`):

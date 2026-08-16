@@ -62,7 +62,13 @@ try {
         : body.toLowerCase().includes(String(task.answer).toLowerCase());
 
     if (matches) {
-      console.log(`✓ ${task.id}: ${task.answer} is present at ${short(task.oracleUrl)}`);
+      // Presence is not sufficiency. "Which engineer designed it" matched
+      // /brunel/ in a source that actually credits Barlow and Hawkshaw "based
+      // on an earlier design by Brunel" — so the model's correct answer was
+      // scored wrong six times out of six. Printing the sentence the match
+      // sits in is what makes that visible; no check can decide it for you.
+      console.log(`✓ ${task.id}: ${task.answer} at ${short(task.oracleUrl)}`);
+      console.log(`    "${sentenceAround(body, task.answer)}"`);
     } else {
       console.error(
         `✗ ${task.id}: ${task.answer} does NOT appear at ${short(task.oracleUrl)} — ` +
@@ -77,6 +83,29 @@ try {
 
 console.log(`\n${checked} checked, ${failed} unanswerable, ${skipped} with no oracle to check.`);
 process.exit(failed > 0 ? 1 : 0);
+
+/**
+ * The sentence a match sits in, so ambiguity is visible to a reader.
+ *
+ * @param {string} body
+ * @param {RegExp|string} answer
+ * @returns {string}
+ */
+function sentenceAround(body, answer) {
+  let text = body;
+  try {
+    const parsed = JSON.parse(body);
+    if (typeof parsed?.extract === 'string') text = parsed.extract;
+  } catch {
+    /* not JSON; search the raw text */
+  }
+  const re = answer instanceof RegExp ? answer : new RegExp(String(answer), 'i');
+  const at = text.search(re);
+  if (at < 0) return '(match is outside the readable text)';
+  const start = Math.max(0, text.lastIndexOf('.', at) + 1);
+  const end = text.indexOf('.', at);
+  return text.slice(start, end < 0 ? at + 160 : end + 1).trim();
+}
 
 /** @param {string} url */
 function short(url) {

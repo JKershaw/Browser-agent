@@ -134,11 +134,15 @@ export function wikiTasks() {
       {
         id: 'wiki-clifton',
         // Obscure enough that a 0.6B model reciting from memory is unlikely,
-        // so a correct answer is evidence it read the response.
-        ask: 'Look up the Wikipedia article "Clifton Suspension Bridge" and tell me which engineer designed it.',
+        // so a correct answer is evidence it read the response. It used to ask
+        // which engineer designed the bridge; the source says Barlow and
+        // Hawkshaw, "based on an earlier design by Brunel", and the model's
+        // faithful answer was marked wrong six times out of six for not saying
+        // Brunel. Ask things the source answers once.
+        ask: 'Look up the Wikipedia article "Clifton Suspension Bridge" and tell me in which year it opened.',
         expectTool: true,
         expect: { host, pathIncludes: 'clifton' },
-        answer: /brunel/i,
+        answer: /1864/,
         oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Clifton_Suspension_Bridge',
       },
       {
@@ -148,10 +152,10 @@ export function wikiTasks() {
         // find the endpoint at all. Supplying endpoints is only worth building
         // if the answer here is yes.
         id: 'wiki-given-api-url',
-        ask: 'Use the curl tool to GET https://en.wikipedia.org/api/rest_v1/page/summary/Clifton_Suspension_Bridge and then tell me which engineer designed it.',
+        ask: 'Use the curl tool to GET https://en.wikipedia.org/api/rest_v1/page/summary/Clifton_Suspension_Bridge and then tell me in which year it opened.',
         expectTool: true,
         expect: { host, pathIncludes: 'summary/clifton' },
-        answer: /brunel/i,
+        answer: /1864/,
         oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Clifton_Suspension_Bridge',
       },
       {

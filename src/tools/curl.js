@@ -10,6 +10,7 @@
  */
 
 import { ALLOWED_METHODS, ALLOWED_SCHEMES } from '../agent/toolcall.js';
+import { apiHintFor } from './api-hints.js';
 
 /**
  * Distinct failure modes. Each maps to its own user-facing explanation; see
@@ -493,7 +494,13 @@ function explain(kind, ctx) {
           ? 'A CORS proxy is configured and was used, so the proxy itself may be down or may not allow this target.'
           : 'No CORS proxy is configured. If the target is not CORS-enabled, set a proxy URL template in settings (e.g. https://your-proxy.example/?url={url}).',
         'Other possibilities: DNS failure, connection refused, TLS error, or the host being offline.',
-      ].join(' ');
+        // Everything above tells you what went wrong; a model cannot act on any
+        // of it. This is the only part that names a URL that would work, and it
+        // appears only for hosts we have actually verified.
+        apiHintFor(ctx.host),
+      ]
+        .filter(Boolean)
+        .join(' ');
     case CurlError.INVALID_URL:
       return `"${ctx.url}" is not a valid absolute URL. Include the scheme, e.g. https://example.com/path.`;
     case CurlError.BLOCKED_SCHEME:
@@ -681,7 +688,7 @@ export async function executeCurl(args, opts = {}) {
       }
       return failure(
         CurlError.NETWORK,
-        { proxyConfigured: request.proxied },
+        { proxyConfigured: request.proxied, host },
         elapsed(),
         { request, detail: String(e?.message || e) }
       );

@@ -45,7 +45,8 @@ const app = await startStaticServer(APP_PORT);
 const target = await startTargetServer();
 const tasks = (() => {
   const s = pickSuite(args.suite, target.url);
-  return args.holdout ? s.holdout : s.dev;
+  const chosen = args.holdout ? s.holdout : s.dev;
+  return args.task ? chosen.filter((t) => t.id === args.task) : chosen;
 })();
 
 console.log(
@@ -258,7 +259,7 @@ function describe(counts) {
 
 /** @param {string[]} argv */
 function parseArgs(argv) {
-  const out = { suite: 'local', n: 10, temp: 0.6, model: [], json: '', holdout: false };
+  const out = { suite: 'local', n: 10, temp: 0.6, model: [], json: '', holdout: false, task: '' };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--holdout') out.holdout = true;
@@ -267,6 +268,7 @@ function parseArgs(argv) {
     else if (a === '--temp') out.temp = Number(argv[++i]);
     else if (a === '--model') out.model.push(argv[++i]);
     else if (a === '--json') out.json = argv[++i];
+    else if (a === '--task') out.task = argv[++i];
     else {
       console.error(`Unknown argument: ${a}`);
       process.exit(1);

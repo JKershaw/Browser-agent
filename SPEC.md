@@ -1,5 +1,12 @@
 # Spec v2: Browser-Native AI Agent with HTTP Tool
 
+> **This is the brief the project was built from, kept as written.** Where
+> reality has since moved on — there are two tools now (`wiki` joined
+> `curl`), and explicitly sequenced asks are split into steps in code —
+> [README.md](README.md) and [ARCHITECTURE.md](ARCHITECTURE.md) are current.
+> Section references like "SPEC §5.3" in code comments point here and remain
+> accurate for what they cite.
+
 ## 1. Overview
 
 A single-page web application providing a chat interface to an in-browser LLM (WebLLM / WebGPU) acting as an agent with exactly one tool: an HTTP request tool ("curl") built on the browser's `fetch` API. Everything runs client-side; there is no backend. The deliverable is a **single self-contained HTML file** suitable for hosting on GitHub Pages or any static host, and openable on desktop and mobile browsers.

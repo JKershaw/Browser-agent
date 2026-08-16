@@ -97,8 +97,13 @@ Chrome-only).
 
 ## Agent loop sequence
 
+What follows is one *step*. Almost always a user message is exactly one step;
+an explicitly sequenced ask ("fetch X, then look up Y") is first split by
+`split.js` and runs this sequence once per step on the shared transcript,
+with one tool budget across all of them (see the loop notes below).
+
 ```
-user message
+user message (one step)
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐

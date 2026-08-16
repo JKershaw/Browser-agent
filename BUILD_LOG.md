@@ -757,3 +757,51 @@ and both would have been made confidently.
 
 Three of the five defects in this section were found by measurement rather than
 by reading, and two of them were in the measuring instrument.
+
+## What using it on a phone found
+
+The 90% was real, and it was not the number that mattered. Asked "Look up Alan
+Turing on Wikipedia and tell me about his life", the deployed app fetched
+`https://wikipedia.org/wiki/Alan_Turing`, was handed the working REST URL by the
+failure hint, and re-sent the identical broken URL — twice, then a third time.
+
+Three tasks were added to reproduce it before anything was changed. The middle
+one is the user's message verbatim; the third forces the failing URL so that
+every sample exercises the recovery path rather than waiting for the model to
+choose a doomed URL on its own.
+
+| task | what it isolates | rate (n=20) |
+|---|---|---|
+| `wiki-turing-recover` | hint fires, model only has to obey it | **100%** |
+| `wiki-turing-open` | the user's phrasing; model picks the URL | **75%** |
+| `wiki-turing-fact` | house phrasing; model picks the URL | **70%** |
+
+The first hypothesis — that the suite's phrasing was kinder than a real user's —
+is wrong. House phrasing scored slightly *worse*, with overlapping intervals.
+
+### The eleven failures
+
+- **6** re-sent an identical unfetchable URL until the iteration cap.
+- **2** took the hint's *path* and kept their own host, producing
+  `https://www.wikipedia.org/api/rest_v1/page/summary/Alan_Turing` — a real
+  HTTP 500, because the portal has no article API.
+- **2** took the hint's *host* and kept their own `/wiki/` path. One then
+  invented `api.wikipidia.com`.
+- **1** fetched the right URL, got a clean 200, and answered wrong.
+
+So ten of eleven failures are URL construction and one is comprehension. The
+middle four are the finding: the model does not copy the recommended URL, it
+**recombines** it — grafting the hint's host onto its own path, or its own host
+onto the hint's path. Both halves of a correct URL, assembled wrong. No wording
+of the hint addresses that, because the model is not failing to read it.
+
+Set against what it got right: the article title was correct in **11 out of 11**
+failures, `api.wikipidia.com/wiki/Alan_Turing` included. The tool asks the model
+to get scheme, host, path shape and title right simultaneously, and it reliably
+gets exactly one of them right — the one a search tool would ask for on its own.
+
+### A gap the taxonomy exposed
+
+Hints fire on `NETWORK` failures only. The `www` case returns HTTP 500, which is
+a successful round-trip, so those samples were given no hint at all — which is
+why they repeated too.

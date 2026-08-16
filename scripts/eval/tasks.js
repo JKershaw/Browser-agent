@@ -159,6 +159,52 @@ export function wikiTasks() {
         oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Clifton_Suspension_Bridge',
       },
       {
+        // Reported from the deployed app on a phone: the model fetched
+        // `https://wikipedia.org/wiki/Alan_Turing`, was handed the working REST
+        // URL by the failure hint, and re-sent the identical broken URL — twice.
+        //
+        // Deliberately not `en.wikipedia.org`: the whole point is which host it
+        // reaches for, so pinning one would hide the finding. Any host counts;
+        // `pathIncludes` alone keeps it on-subject.
+        //
+        // Read the *buckets*, not just the rate. Turing is famous enough that a
+        // 0.6B model can produce a passing answer from memory, so `answer` is
+        // weak evidence of grounding here — but grading requires a successful
+        // on-target request first, so `request_failed` vs `ok` still measures
+        // exactly the thing this task exists for: does it recover?
+        id: 'wiki-turing-open',
+        ask: 'Look up Alan Turing on Wikipedia and tell me about his life.',
+        expectTool: true,
+        expect: { pathIncludes: 'turing' },
+        answer: /mathematician|computer scientist|cryptanalyst|logician|turing machine/i,
+        oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Alan_Turing',
+      },
+      {
+        // Same subject, house phrasing — names the article, asks one fact. The
+        // only variable against `wiki-turing-open` is how the question is put,
+        // which is the cheapest explanation for why the deployed app failed on
+        // a subject the suite never covered in the user's own words.
+        id: 'wiki-turing-fact',
+        ask: 'Look up the Wikipedia article "Alan Turing" and tell me which field he is widely considered the father of.',
+        expectTool: true,
+        expect: { pathIncludes: 'turing' },
+        answer: /computer science/i,
+        oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Alan_Turing',
+      },
+      {
+        // Forces the failing first request rather than waiting for the model to
+        // choose it, so every sample exercises the recovery path and the rate
+        // is a measurement of the hint itself instead of a measurement of how
+        // often the model happens to pick a doomed URL. The highest-signal of
+        // the three, and the one a fix has to move.
+        id: 'wiki-turing-recover',
+        ask: 'Use the curl tool to GET https://wikipedia.org/wiki/Alan_Turing and tell me what Alan Turing is described as.',
+        expectTool: true,
+        expect: { pathIncludes: 'turing' },
+        answer: /mathematician|computer scientist|cryptanalyst|logician/i,
+        oracleUrl: 'https://en.wikipedia.org/api/rest_v1/page/summary/Alan_Turing',
+      },
+      {
         id: 'wiki-no-tool',
         ask: 'Without using any tool, tell me: what is the chemical symbol for gold?',
         expectTool: false,

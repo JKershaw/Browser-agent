@@ -115,6 +115,42 @@ describe('grade', () => {
     expect(grade(TASK, sample)).toBe(Grade.OK);
   });
 
+  // Fan-out tasks: `expectEach` lists one expectation per required request,
+  // and all of them must be met by real requests. "Look up A and B" answered
+  // after fetching only A is the fan-out not happening.
+  const FANOUT = {
+    expectTool: true,
+    expectEach: [
+      { host: 'en.wikipedia.org', pathIncludes: 'clifton' },
+      { host: 'en.wikipedia.org', pathIncludes: 'tower' },
+    ],
+    answer: /clifton/i,
+  };
+  const CLIFTON = 'https://en.wikipedia.org/api/rest_v1/page/summary/Clifton_Suspension_Bridge';
+  const TOWER = 'https://en.wikipedia.org/api/rest_v1/page/summary/Tower_Bridge';
+
+  it('passes a fan-out only when every listed target was fetched', () => {
+    const answer = 'The Clifton Suspension Bridge opened first.';
+    expect(grade(FANOUT, { requests: [req(CLIFTON), req(TOWER)], answer })).toBe(Grade.OK);
+    expect(grade(FANOUT, { requests: [req(CLIFTON)], answer })).toBe(Grade.WRONG_TARGET);
+  });
+
+  it('holds a fan-out to every leg completing, not just one', () => {
+    const answer = 'The Clifton Suspension Bridge opened first.';
+    expect(
+      grade(FANOUT, { requests: [req(CLIFTON), req(TOWER, { status: 'error' })], answer })
+    ).toBe(Grade.REQUEST_FAILED);
+    expect(
+      grade(FANOUT, { requests: [req(CLIFTON), req(TOWER, { httpStatus: 404 })], answer })
+    ).toBe(Grade.HTTP_ERROR);
+  });
+
+  it('lets a retried fan-out leg succeed on the second try', () => {
+    const answer = 'Clifton opened first, in 1864.';
+    const requests = [req(CLIFTON), req(TOWER, { status: 'error' }), req(TOWER)];
+    expect(grade(FANOUT, { requests, answer })).toBe(Grade.OK);
+  });
+
   it('distinguishes silence from unparseable output', () => {
     expect(grade(TASK, { requests: [], stopReason: 'text', answer: 'I cannot.' })).toBe(Grade.NO_CALL);
     expect(grade(TASK, { requests: [], stopReason: 'unparseable', answer: '' })).toBe(Grade.MALFORMED);

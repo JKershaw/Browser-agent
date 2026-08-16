@@ -1328,3 +1328,52 @@ referents pass explicitly ("look Bristol up", never "that city"); and edges
 verify + retry, because 95% per step is 86% at depth three. The lowest
 broken or unmeasured rung is the next piece of work, which currently makes
 the fan-out baseline (rung 6) and referent substitution the queue.
+
+## The fan-out baseline: one tool fans out, the other quietly doesn't
+
+Rung 6 of the ladder — "look up A and B, compare" — had no number, and the
+rule is to land the baseline before building any mechanism. Two dev tasks
+now measure it as the model does it unaided (neither contains a "then", so
+the chain-driver leaves them whole), and grading grew `expectEach`: one
+expectation per required request, all of which must be hit — fetching only
+A on a two-legged ask lands in `wrong_target`, the same bucket as a chain's
+missing hop. A regrade of the last full local run confirmed the refactor
+moved nothing (214/220, identical).
+
+The result is a split, and the split is the finding:
+
+| task | tool | n | result |
+|---|---|---|---|
+| `fanout-wiki-bridges` | wiki | 20 | **17/20 = 85%** (64–95) — both legs fetched in 20/20 |
+| `fanout-local-two-gets` | curl | 20 | **0/20 = 0%** (0–16) — second leg dropped in 20/20 |
+
+With the wiki tool, fan-out mostly already works: every sample searched and
+fetched *both* articles, and every prose answer put both opening years side
+by side with the right attribution. The three failures never answered at
+all — a repeat spiral (redundant combined re-searches, `repeat_ok` in 10/20
+samples) ate the 4-call budget and the sample died at the cap mid-tool-call.
+With curl, fan-out simply does not happen: all twenty samples made the first
+GET, silently dropped the second, and confidently reported the *first*
+request's own `200` as "the status code you got" — the chain task's
+silent-second-hop drop, wearing new clothes. The likely reason for the gap:
+the wiki flow is already two calls per subject (search, then summary), so
+continuing to call is in-distribution; for curl, one response in view reads
+as "done".
+
+Two grader lessons, recorded because this run supplied both. The task's
+first answer bar was `/clifton/i` and it scored a flattering 20/20 while
+only ~4 samples actually said which bridge opened first — the question
+itself supplies the word "Clifton" to parrot, and a sample that dies at the
+cap leaves a raw tool call as its "answer", which contains it too. The fifth
+grader mismark in this project, and the first to flatter rather than punish;
+the bar is now the year, which appears only in the Clifton summary. And the
+pair this task nearly used — Golden Gate vs Brooklyn — would have rebuilt
+the `wiki-telephone` unanswerable-task trap: Golden Gate's summary contains
+no year at all. Checked before landing, this time.
+
+What the baseline says the mechanism should be: nothing, yet, for the wiki
+tool — 85% with a known budget-spiral failure is a repeat/budget problem,
+not a dispatch problem. For curl the number to move is 0/20, and the honest
+candidates are deterministic (split "GET X and also GET Y" into two steps
+the way "then" asks already split) rather than prompt text asking a 0.6B to
+remember its second errand.

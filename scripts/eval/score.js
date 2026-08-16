@@ -93,11 +93,16 @@ export function grade(task, sample) {
     return sample?.stopReason === 'unparseable' ? Grade.MALFORMED : Grade.NO_CALL;
   }
 
-  const onTarget = requests.filter((r) => matchesTarget(task.expect, r));
-  if (onTarget.length === 0) return Grade.WRONG_TARGET;
+  // A fan-out task lists one expectation per required request (`expectEach`),
+  // and every one of them must be met — "look up A and B" with only A fetched
+  // is the fan-out not happening, and it lands in wrong_target exactly as a
+  // chain task's missing hop does. A task with a single `expect` is the
+  // one-element case of the same rule.
+  const expects = task.expectEach || [task.expect];
+  const hitsPer = expects.map((e) => requests.filter((r) => matchesTarget(e, r)));
+  if (hitsPer.some((hits) => hits.length === 0)) return Grade.WRONG_TARGET;
 
-  const delivered = onTarget.filter((r) => r.status === 'ok');
-  if (delivered.length === 0) {
+  if (hitsPer.some((hits) => !hits.some((r) => r.status === 'ok'))) {
     // Some tasks are about what the agent does when a request *cannot* succeed
     // — an unreachable host, a refused connection. There the failure is the
     // premise, not the outcome, and the thing being graded is whether the agent
@@ -112,8 +117,8 @@ export function grade(task, sample) {
   // worth seeing separately from a wrong answer. Tasks whose whole point is an
   // error status say so and are graded on the answer instead.
   if (!task.allowHttpError) {
-    const answered = delivered.filter((r) => (r.httpStatus ?? 200) < 400);
-    if (answered.length === 0) return Grade.HTTP_ERROR;
+    const answered = (hits) => hits.some((r) => r.status === 'ok' && (r.httpStatus ?? 200) < 400);
+    if (!hitsPer.every(answered)) return Grade.HTTP_ERROR;
   }
 
   return answerMatches(task, sample) ? Grade.OK : Grade.ANSWER_WRONG;

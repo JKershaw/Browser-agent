@@ -1141,3 +1141,42 @@ is being fixed for 1.7B now (0.6B is the product target and 1.7B was never the
 tuning target); the numbers are recorded so the next model-size conversation
 starts from measurement instead of vibes. Runs saved as `wiki-1.7b-after.json`
 and `local-1.7b-after.json` with provenance.
+
+## The probe ladder: where the agent actually breaks now
+
+With the dev suites saturated, the cheapest instrument was informality: seven
+scenarios of rising difficulty, three samples each, no grader — just reading
+21 transcripts (`probe.mjs`, scratchpad-only). What held: ambiguity resolution
+("that famous suspension bridge in Bristol" → Clifton, 2/3), restraint under a
+conflicting instruction (3/3, muddled prose aside), and retrieval after a
+four-turn preamble (3/3). What broke, in order of importance:
+
+1. **The second hop of a chain is silently dropped.** "GET /json to find the
+   city, then look that city up on Wikipedia and tell me its country": all
+   three samples fetched the JSON and then answered the Wikipedia half from
+   memory. One said *France* — with exactly the confidence of a correct
+   answer. The model collapses a two-step plan into one step plus recall, and
+   when recall is wrong there is nothing on screen to distinguish it.
+2. **"Alan Turing" is the new `example.com`.** Given no referent ("Can you
+   look it up for me?") or a hard one, the model searches the system prompt's
+   example query: one bridge question searched Alan Turing and then invented
+   an "Ashdown Bridge, designed by Robert T. Ashdown". The placeholder lesson
+   — anything in an example will be emitted verbatim under pressure — now has
+   a fifth instance, and it is the wiki example's query.
+3. **One sample answered a question by repeating it verbatim**, and two others
+   spiralled into apology ("I was unable to complete the request…") instead of
+   reading an answer they already had.
+
+The two gradeable shapes are now dev tasks, and their before-numbers are the
+first suite headroom this project has had in a while:
+
+| task | grades | before |
+|---|---|---|
+| `chain-json-then-wiki` | the *second hop request*, not the fact — a correct answer from recall still fails as `wrong_target` | **3/20 = 15%** |
+| `memory-city-recall` | restraint first (any fetch is `spurious`), then naming the city from turn one | 18/20 = 90% |
+
+15% is the number the routing/decomposition experiments now have to beat, and
+it is a much better argument for them than the 99% ceiling was: the model
+demonstrably cannot hold "fetch, then use the result to fetch again" as a plan
+on its own. Baseline landed with no fix, as ever, so whatever moves it next is
+measured and not remembered.

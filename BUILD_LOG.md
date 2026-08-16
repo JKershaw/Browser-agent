@@ -617,10 +617,27 @@ scores a sample as a first-try success on `result.iterations > 0` — it never
 looks at the request the model built. The exact failure above (well-formed JSON,
 valid schema, wrong URL) counts as a clean pass.
 
+### And one more, found by fixing the last one
+
+Pinning the port made runs repeatable, and a repeatable run promptly failed
+twice in the same place: the dead-port scenario, where the turn simply never
+ended. After the request to the dead port fails, the model quite reasonably
+proposes another one — within its iteration cap — and the test approved exactly
+one card. The second card sat there unanswered, the loop waited on a promise
+nobody would settle, and the failure surfaced 120 seconds later as "Stop is
+still visible", which says nothing about what happened.
+
+How many requests a model makes for one message is not a contract we can
+assert. The scenarios now answer every card the turn raises and let the cap end
+it, and the dead-port assertion checks that *every* failed attempt carries the
+explanation rather than that there was exactly one.
+
 ### Verified
 
-- 615 unit tests.
+- 640 unit tests.
 - `npm run test:e2e:real`: five scenarios green against a real Qwen3-0.6B on
   Metal — cold start, a tool round-trip whose request the test server confirms
   receiving, a denial that sends nothing, the CORS explanation on a dead port,
   and non-zero throughput stats.
+- The origin fix, measured: 9.4 minutes cold, 2.2 minutes warm, on runs that
+  before it were 4.7 minutes *every* time.

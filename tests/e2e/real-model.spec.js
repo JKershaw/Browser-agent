@@ -158,6 +158,35 @@ async function ask(text) {
   await page.locator('#send').click();
 }
 
+/**
+ * Answer every confirmation card the turn raises, until the turn ends.
+ *
+ * How many requests a model makes for one message is the model's business, not
+ * a contract we can assert. A request that fails is often followed by another
+ * attempt — entirely reasonable behaviour, and within the iteration cap — and a
+ * test that approves exactly one card leaves the second one open, waits on a
+ * promise nobody will settle, and fails on a timeout that says nothing about
+ * what broke. So respond to all of them and let the cap end the turn.
+ *
+ * @param {'Approve'|'Deny'} answer
+ */
+async function settleTurn(answer) {
+  const stop = page.locator('#stop');
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    if (!(await stop.isVisible())) return;
+    const card = page.locator('.confirm-card').first();
+    if (await card.isVisible().catch(() => false)) {
+      // The turn can end between the check and the click; that is a win, not
+      // an error, so a failed click is ignored and the loop re-checks.
+      await card.getByRole('button', { name: answer }).click().catch(() => {});
+    } else {
+      await page.waitForTimeout(250);
+    }
+  }
+  throw new Error('The turn did not end within 120s.');
+}
+
 test('cold start: the model loads and answers a plain question', async () => {
   await ask('Say hello in one short sentence.');
   await expect(page.locator('#stop')).toBeHidden({ timeout: 120_000 });
@@ -176,9 +205,7 @@ test('tool round-trip: the model builds a real request and reads the response', 
   const card = page.locator('.confirm-card');
   await expect(card).toBeVisible({ timeout: 120_000 });
   await expect(card).toContainText('127.0.0.1');
-  await card.getByRole('button', { name: 'Approve' }).click();
-
-  await expect(page.locator('#stop')).toBeHidden({ timeout: 120_000 });
+  await settleTurn('Approve');
 
   // Strict: the request really happened, and the log recorded it.
   const hits = target.received().filter((r) => r.path === '/json');
@@ -195,9 +222,10 @@ test('denial: the model is told and does not send', async () => {
 
   const card = page.locator('.confirm-card');
   await expect(card).toBeVisible({ timeout: 120_000 });
-  await card.getByRole('button', { name: 'Deny' }).click();
-  await expect(page.locator('#stop')).toBeHidden({ timeout: 120_000 });
+  await settleTurn('Deny');
 
+  // Every card was denied, so nothing may have gone out — however many times
+  // the model asked.
   expect(target.received().length).toBe(before);
   await expect(page.locator('.tool-card').last()).toHaveClass(/tool-denied/);
 });
@@ -207,12 +235,18 @@ test('error surfacing: a dead port produces the network explanation', async () =
 
   const card = page.locator('.confirm-card');
   await expect(card).toBeVisible({ timeout: 120_000 });
-  await card.getByRole('button', { name: 'Approve' }).click();
-  await expect(page.locator('#stop')).toBeHidden({ timeout: 120_000 });
+  await settleTurn('Approve');
 
-  const tool = page.locator('.tool-card').last();
-  await expect(tool).toHaveClass(/tool-error/);
-  await expect(tool).toContainText('CORS');
+  // A retry after the failure is fine; every attempt must carry the
+  // explanation, so assert on all of them rather than on the last.
+  const tools = page.locator('.tool-card');
+  const failures = [];
+  for (let i = 0; i < (await tools.count()); i += 1) {
+    const cls = (await tools.nth(i).getAttribute('class')) || '';
+    if (cls.includes('tool-error')) failures.push(await tools.nth(i).innerText());
+  }
+  expect(failures.length).toBeGreaterThanOrEqual(1);
+  for (const text of failures) expect(text).toContain('CORS');
 });
 
 test('reports throughput once the model has generated', async () => {

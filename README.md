@@ -417,6 +417,8 @@ site's data and reload.
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the module map, the engine contract,
 the agent-loop sequence, the tool-call schema and the error taxonomy;
 [docs/prompts.md](docs/prompts.md) for every prompt verbatim;
+[docs/capability-ladder.md](docs/capability-ladder.md) for what the agent can
+do, rung by rung, with a prompt to try at each level;
 [docs/research-notes.md](docs/research-notes.md) for how our measured prompt
 lessons line up with published research; [SPEC.md](SPEC.md)
 for the original design brief; and [BUILD_LOG.md](BUILD_LOG.md) for how it was

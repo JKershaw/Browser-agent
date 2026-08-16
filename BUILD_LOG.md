@@ -1307,3 +1307,24 @@ the element she discovered *first*, the model picked radium all three times
 when the article lists polonium first — the chain executes, but fine-grained
 fact selection inside a fetched result is its own weakness, and it would
 grade `answer_wrong` if promoted to a task.
+
+## The capability ladder, written down
+
+The steering question — "what should we work on next?" — now has a standing
+answer: `docs/capability-ladder.md`, a plain-language ladder of task
+complexity from "answer or refrain" (100%) up through explicit chains (95%,
+was 15%) to the unbuilt rungs (implicit chains, fan-out, trees with
+clarification), each with a measured number and a prompt to type into the
+live app by hand. The manual column is policy, not decoration: the suites
+grade requests, but only a human notices when something *feels* wrong, and
+each kind of check has caught things the other missed.
+
+The design notes for the tree rungs record the agreed direction before any
+code exists: calls push a small structured payload (end with the
+instruction); children pull the rest by asking their caller, answered from a
+throwaway copy of the caller's transcript so the live context never grows —
+deterministic-first, because transcript recall is our weakest measured rung;
+referents pass explicitly ("look Bristol up", never "that city"); and edges
+verify + retry, because 95% per step is 86% at depth three. The lowest
+broken or unmeasured rung is the next piece of work, which currently makes
+the fan-out baseline (rung 6) and referent substitution the queue.

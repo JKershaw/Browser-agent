@@ -548,3 +548,96 @@ advising about, between two loads that were never meant to overlap.
 Still unverified, unchanged from before: nothing here has been exercised against
 a real GPU. The failure path was reproduced from the error text, not from a
 device that ran out of space.
+
+---
+
+## Post-release: the first run on a real GPU
+
+The previous entry closed with "nothing here has been exercised against a real
+GPU". This one is that run. Everything below was found on the way to a green
+`npm run test:e2e:real` on an Apple M-series machine, and none of it was in the
+product: the app behaved correctly at every step, including turning a CDN
+failure into an honest skip. All four defects were in the suite meant to test
+it.
+
+### Why it had never passed anywhere
+
+**Headless Chromium cannot run these models at all.** It exposes a WebGPU
+adapter, so the suite's `requestAdapter()` check said yes — but the adapter is
+SwiftShader, and SwiftShader has no `shader-f16`. Every `q4f16_1` build in the
+catalogue needs that feature, so the run could only ever fail from somewhere
+deep inside WebLLM, and the skip guard that existed to prevent exactly that
+outcome waved it through. Measured on this machine:
+
+```
+headless  {"adapter":true,"arch":"swiftshader","f16":false}
+headed    {"adapter":true,"arch":"metal-3",   "f16":true}
+```
+
+The suite now runs headed, and the probe asks for the feature rather than for
+the API.
+
+**The 15-minute allowance never applied to the download.**
+`test.describe.configure({timeout})` governs tests, not hooks — and the hook is
+where the 0.4 GB download happens. It ran under the config's 60 s and was killed
+mid-load every time. `test.setTimeout()` inside the hook is the fix.
+
+**The suite loaded one model while the app downloaded another.** Setup
+navigated to the page and then called `engine.load('Qwen3-0.6B')` directly. But
+`boot()` had already started loading whatever tier this device would pick by
+default — 4B, 2.5 GB — and `modelLoaded` is UI state that only `main.js` sets,
+so the composer stayed disabled no matter which load finished. The symptom was a
+blank page, a dead Send button and 2 GB of traffic for a model nobody asked for.
+`probe()` already honours a persisted `modelId`, so the fix is to seed
+`localStorage` before the page boots and let the app load its own model through
+its own path — then wait for the outcome the user would see: a live composer, or
+the failure card.
+
+**The persistent profile was never reused.** `startStaticServer()` binds an
+ephemeral port, and browsers partition the weight cache by origin. Every run was
+therefore a new origin, a cold cache, another 0.4 GB, and an orphaned copy of
+the last one — `.playwright-profile` had reached 2.7 GB of weights that nothing
+could ever read again. The suite now pins the app to port 43117.
+
+### What the run then found
+
+With the suite fixed, two consecutive runs of the same commit disagreed. In one,
+the model was asked for `http://127.0.0.1:<port>/json` and proposed
+`https://example.com/path` — verbatim the example URL from the system prompt's
+schema block. In the next, all five scenarios passed.
+
+Both results are true. A 0.6B model at temperature 0.6 is a distribution, and
+one sample per behaviour measures a draw from it rather than the behaviour. The
+suite is still worth having — it proves the contract *can* hold end to end,
+which is what an e2e test is for — but "does the tool contract hold" is a
+question about a rate, and answering it needs a different instrument.
+
+Which also exposed a gap in the instrument we have. `scripts/model-check.js`
+scores a sample as a first-try success on `result.iterations > 0` — it never
+looks at the request the model built. The exact failure above (well-formed JSON,
+valid schema, wrong URL) counts as a clean pass.
+
+### And one more, found by fixing the last one
+
+Pinning the port made runs repeatable, and a repeatable run promptly failed
+twice in the same place: the dead-port scenario, where the turn simply never
+ended. After the request to the dead port fails, the model quite reasonably
+proposes another one — within its iteration cap — and the test approved exactly
+one card. The second card sat there unanswered, the loop waited on a promise
+nobody would settle, and the failure surfaced 120 seconds later as "Stop is
+still visible", which says nothing about what happened.
+
+How many requests a model makes for one message is not a contract we can
+assert. The scenarios now answer every card the turn raises and let the cap end
+it, and the dead-port assertion checks that *every* failed attempt carries the
+explanation rather than that there was exactly one.
+
+### Verified
+
+- 640 unit tests.
+- `npm run test:e2e:real`: five scenarios green against a real Qwen3-0.6B on
+  Metal — cold start, a tool round-trip whose request the test server confirms
+  receiving, a denial that sends nothing, the CORS explanation on a dead port,
+  and non-zero throughput stats.
+- The origin fix, measured: 9.4 minutes cold, 2.2 minutes warm, on runs that
+  before it were 4.7 minutes *every* time.

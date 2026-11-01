@@ -18,6 +18,7 @@ import { renderCapabilityGate } from './ui/gate.js';
 import { createLoadTracker } from './llm/progress.js';
 import { formatSize } from './llm/format.js';
 import { el } from './ui/dom.js';
+import { createInstallPrompt, isStandalone, registerServiceWorker } from './pwa/install.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -194,6 +195,32 @@ document.addEventListener('keydown', (e) => {
 });
 
 /* ------------------------------------------------------------------ *
+ * install + offline
+ * ------------------------------------------------------------------ */
+
+// Installed at module load, not in boot(): Chrome can fire
+// beforeinstallprompt early, and an event nobody was listening for is gone.
+const installBtn = $('#install');
+const install = createInstallPrompt({
+  target: globalThis,
+  onChange: ({ available }) => {
+    installBtn.hidden = !available || isStandalone(globalThis);
+  },
+  onInstalled: () => {
+    chat.addNotice({
+      kind: 'info',
+      text: 'Installed. Browser Agent now opens from your apps like any other. Once a model has finished downloading, chatting works without a connection; fetching from the web still needs one.',
+    });
+  },
+});
+installBtn.addEventListener('click', () => install.prompt());
+
+const OFFLINE_NOTICE =
+  'This device is offline. Chatting with a downloaded model still works; fetching anything from the web needs a connection.';
+globalThis.addEventListener('offline', () => chat.addNotice({ kind: 'warning', text: OFFLINE_NOTICE }));
+globalThis.addEventListener('online', () => chat.addNotice({ kind: 'info', text: 'Back online.' }));
+
+/* ------------------------------------------------------------------ *
  * boot
  * ------------------------------------------------------------------ */
 
@@ -360,6 +387,17 @@ async function boot() {
 
   if (app.isFileOrigin()) {
     $('#file-notice').hidden = false;
+  }
+
+  // Fire-and-forget: the page works the same whether or not this succeeds.
+  registerServiceWorker({
+    location: globalThis.location,
+    navigator: globalThis.navigator,
+    dev: import.meta.env.DEV,
+  });
+
+  if (globalThis.navigator?.onLine === false) {
+    chat.addNotice({ kind: 'warning', text: OFFLINE_NOTICE });
   }
 
   if (wantsMockEngine()) {

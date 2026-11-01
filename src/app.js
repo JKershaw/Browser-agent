@@ -254,6 +254,8 @@ export function createApp(opts = {}) {
         storage,
         snapshot: ctx.snapshot,
         caps: ctx.caps,
+        // Only a definite `false` counts: missing means "do not know".
+        online: nav?.onLine === false ? false : undefined,
         userAgent: nav?.userAgent || 'unknown',
         pageUrl: reportablePageUrl(),
         timestamp: new Date().toISOString(),

@@ -162,6 +162,21 @@ describe('diagnoseLoadError', () => {
     expect(d.explain).toMatch(/connection/i);
   });
 
+  it('names being offline outright when the browser says so', () => {
+    const d = diagnoseLoadError(new TypeError('Failed to fetch'), { ...tightPhone, online: false });
+    expect(d.kind).toBe(LoadErrorKind.NETWORK);
+    expect(d.title).toMatch(/offline/i);
+    expect(d.explain).toMatch(/not finished downloading/);
+    expect(d.actions).toEqual({ retry: true, smallerModel: false, freeSpace: false, clearData: false });
+  });
+
+  it('keeps the dropped-connection reading when online or unknown', () => {
+    for (const online of [true, undefined]) {
+      const d = diagnoseLoadError(new TypeError('Failed to fetch'), { ...tightPhone, online });
+      expect(d.title).toBe('The download did not finish');
+    }
+  });
+
   it('sends a GPU memory failure to the model picker, not the storage advice', () => {
     const d = diagnoseLoadError(new Error('Out of memory'), tightPhone);
     expect(d.kind).toBe(LoadErrorKind.GPU_MEMORY);

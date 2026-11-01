@@ -640,6 +640,18 @@ describe('createApp().diagnoseLoad', () => {
     expect(d.advice.join(' ')).toMatch(/damaged cache/);
   });
 
+  it('tells the diagnosis when the browser knows it is offline', async () => {
+    const make = (onLine) => createApp({
+      storage: createMemoryStorage(),
+      engine: createMockEngine(),
+      navigator: { ...navWithStorage(), onLine },
+    });
+    const offline = await make(false).diagnoseLoad(new TypeError('Failed to fetch'), { modelId: 'Qwen3-0.6B-q4f16_1-MLC' });
+    expect(offline.title).toMatch(/offline/i);
+    const online = await make(true).diagnoseLoad(new TypeError('Failed to fetch'), { modelId: 'Qwen3-0.6B-q4f16_1-MLC' });
+    expect(online.title).toBe('The download did not finish');
+  });
+
   it('carries the progress snapshot into the report', async () => {
     const app = createApp({
       storage: createMemoryStorage(),

@@ -142,33 +142,73 @@ export async function startTargetServer(port = 0) {
 }
 
 /**
- * Serve the built single-file artifact.
+ * The installable-app sidecar files the build emits next to `index.html`, and
+ * the types they must be served with (a service worker served as anything but
+ * JavaScript is refused). Mirrors the allowlist in `.github/workflows/ci.yml`.
+ */
+export const PWA_FILES = Object.freeze({
+  '/manifest.webmanifest': 'application/manifest+json',
+  '/sw.js': 'text/javascript; charset=utf-8',
+  '/icons/icon-192.png': 'image/png',
+  '/icons/icon-512.png': 'image/png',
+  '/icons/icon-maskable-512.png': 'image/png',
+  '/icons/apple-touch-icon.png': 'image/png',
+});
+
+/**
+ * Serve the built artifact.
  *
- * Deliberately minimal: it can only serve `dist/index.html`, which is the
- * point — if the build ever emits a second file the app needs, these tests
- * fail rather than silently passing.
+ * Deliberately minimal: every path answers with `dist/index.html`, except the
+ * fixed list of installable-app files in {@link PWA_FILES}. If the build ever
+ * emits a further file the app needs, these tests fail rather than silently
+ * passing. With `pwa: false` the sidecar files 404, which is how the suite
+ * proves `index.html` still works entirely on its own.
  *
  * @param {number} [port]
- * @returns {Promise<{url: string, port: number, close: () => Promise<void>}>}
+ * @param {string} [distDir]
+ * @param {{pwa?: boolean}} [options]
+ * @returns {Promise<{url: string, port: number, close: () => Promise<void>, stop: () => Promise<void>}>}
  */
-export async function startStaticServer(port = 0, distDir = DIST) {
+export async function startStaticServer(port = 0, distDir = DIST, { pwa = true } = {}) {
   const server = createServer(async (req, res) => {
+    const path = new URL(req.url, 'http://x').pathname;
     try {
+      if (Object.hasOwn(PWA_FILES, path)) {
+        if (!pwa) {
+          res.writeHead(404, { 'Content-Type': 'text/plain' });
+          res.end('not served in this test');
+          return;
+        }
+        const body = await readFile(join(distDir, path.slice(1)));
+        res.writeHead(200, { 'Content-Type': PWA_FILES[path] });
+        res.end(body);
+        return;
+      }
       const html = await readFile(join(distDir, 'index.html'));
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);
     } catch (e) {
       res.writeHead(500, { 'Content-Type': 'text/plain' });
-      res.end(`dist/index.html is missing — run "npm run build" first. (${e.message})`);
+      res.end(`${path} is missing from dist/ — run "npm run build" first. (${e.message})`);
     }
   });
 
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const actual = server.address().port;
+  let stopped = false;
   return {
     url: `http://127.0.0.1:${actual}`,
     port: actual,
-    close: () => new Promise((resolve) => server.close(resolve)),
+    /**
+     * Take the server away mid-test, keep-alive connections included, so the
+     * next request fails the way it would with no network at all.
+     */
+    stop: () => {
+      stopped = true;
+      server.closeAllConnections();
+      return new Promise((resolve) => server.close(() => resolve()));
+    },
+    close: () => (stopped ? Promise.resolve() : new Promise((resolve) => server.close(resolve))),
   };
 }
 

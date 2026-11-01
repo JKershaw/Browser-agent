@@ -1487,3 +1487,56 @@ needs: crisp step answers to extract from, and a single failure mode to
 move. Two failure modes removed at no cost anywhere else is worth landing
 on its own; the rate was never going to move until the recall mechanism
 exists.
+
+## Installable, and chat that works offline
+
+Asked for so that someone could be handed the app with one tap, rather than a
+zip from GitHub — which would have been worse than it looked: opened from
+`file://`, the browser may re-download the model every session.
+
+**What it needed was smaller than expected.** Reading WebLLM 0.2.84's
+`reloadInternal` settled the central question before any code was written:
+the config, the model library wasm, the tokenizer and the weights are all
+fetched through `ArtifactCache.fetchWithCache`, which matches the cache before
+touching the network. A downloaded model already loaded offline; only the page
+did not. So the service worker caches the shell and nothing else.
+
+Built:
+
+- `public/manifest.webmanifest`, `public/sw.js`, and icons rendered by
+  `scripts/make-icons.js` (an *any* rounded square, and a *maskable* full-bleed
+  variant with the glyph inside the 80% safe zone for Android's crop).
+- `src/pwa/install.js`: registration, standalone detection, and the deferred
+  `beforeinstallprompt` behind an **Install** button that only appears when
+  the browser offers it.
+- A new curl error kind, `offline`, used only when a request has *already*
+  failed and `navigator.onLine` is false — never as a pre-flight gate, because
+  localhost answers with the network down. The CORS paragraph would otherwise
+  send someone hunting for a proxy on a plane.
+- The load-failure card names being offline outright when it is, since that
+  can only mean the model has not finished downloading.
+- Notices when the connection drops and returns.
+
+Decisions:
+
+- **Network-first for the page, not cache-first.** Cache-first is the textbook
+  offline strategy and brings a stale-version problem that needs an update
+  prompt. Network-first with a 3.5 s timeout serves the deployed page whenever
+  there is a connection, and the cached one when there is not.
+- **The worker's activation step deletes only `browser-agent-shell-*` caches.**
+  The common pattern deletes every other cache, and on this origin that is the
+  user's gigabytes of model weights.
+- **The single-file guarantee becomes "single file plus optional sidecars".** A
+  service worker cannot be inlined, and a `data:` manifest has an opaque origin
+  and cannot install. CI's build check moved from "only `index.html`" to an
+  explicit allowlist, and `pwa.spec.js` proves `index.html` still works on a
+  host that 404s every sidecar. The deploy check now also confirms the
+  sidecars are live and not answered with HTML.
+
+Verification: 813 unit tests, coverage gate holding (`install.js` 100%
+lines); the full e2e suite, including seven new PWA tests. The offline test
+stops the server as well as switching Playwright offline; run with
+service workers blocked, it fails with `ERR_INTERNET_DISCONNECTED`, so its pass
+is not the network quietly answering. Not verified here: a real install on a
+device, and an offline load of real weights (needs a GPU). The WebLLM reading
+above is why the latter is expected to hold.

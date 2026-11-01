@@ -14,6 +14,12 @@ That constraint drives most of the design: no server means no place to hide a
 secret, no proxy of our own, and no way to see why a cross-origin request
 failed. The app's job is to be honest about all three.
 
+Beside `index.html` the build copies `public/` as-is: a web app manifest, a
+service worker and icons, which make the app installable and let it start
+offline. They are strictly additive — the page works without them, and CI
+asserts that nothing else is ever emitted. See
+[Installing, and starting offline](#installing-and-starting-offline).
+
 ## Module map
 
 ```
@@ -55,6 +61,9 @@ src/
     gate.js         WebGPU capability screen.
     loading.js      Loading card, and the failure report it becomes.
     styles.css      One stylesheet, mobile-first.
+  pwa/
+    install.js      Service-worker registration and the Install button's
+                    state, from the browser's install events. No DOM.
   app.js            Composition root. No DOM.
   main.js           DOM wiring. No decisions.
   debug.js          Bare harness from M1; kept for reproducing engine bugs.
@@ -279,6 +288,7 @@ sees and the log the user reads. Nothing collapses into "request failed".
 | `bad_method` | Method outside the whitelist | The allowed methods. |
 | `bad_proxy` | Proxy template yields an invalid URL | The template, **redacted** — it often carries the user's proxy key. |
 | `timeout` | `AbortController` fired | The configured limit, and where to change it. |
+| `offline` | `fetch` threw *and* `navigator.onLine` is false | That the device is offline, that chat still works, and to retry once reconnected. Checked only after the request fails — localhost answers offline, so it is never a reason not to send. |
 | `mixed_content` | Secure page, plain `http://` target | That the browser blocks it before sending, whatever the server allows, and that only an *HTTPS* proxy helps. |
 | `cancelled` | User pressed Stop | Nothing more. |
 | `network` | `fetch` threw | That the browser hides the reason; that CORS is the usual cause; whether a proxy is configured; what else it could be. |
@@ -360,7 +370,7 @@ the free quota, and the diagnosis quotes it.
 |---|---|---|
 | `storage-full` | `QuotaExceededError`, "quota exceeded" | The browser refused more data, with the measured numbers. |
 | `cache-write` | "Entry was not found", `on 'Cache'` | The download worked and storing it did not; leads with the measurement when the measurement settles it. |
-| `network` | "Failed to fetch", "Network response was not ok", `ERR_*` | The connection dropped; the retry resumes. |
+| `network` | "Failed to fetch", "Network response was not ok", `ERR_*` | The connection dropped; the retry resumes. If the browser reports itself offline, it says that instead: the model has not finished downloading, and a fully downloaded one would not have needed the network. |
 | `gpu-memory` | "out of memory", "exceeds the max buffer size" | It downloaded but will not fit; switch model. |
 | `device-lost` | `DeviceLostError` | The GPU was taken away; reload in the foreground. |
 | `model-unknown` | `ModelNotFoundError` and friends | The id is not in WebLLM's catalogue. |
@@ -429,6 +439,38 @@ Known and accepted limits:
 - The app is same-origin with every other page on its host. On GitHub Pages that
   means every other project on `<user>.github.io`. Use a dedicated host, or
   session-only credentials, if that matters to you.
+
+## Installing, and starting offline
+
+Offline start-up needed less than it looks, because WebLLM already reads
+everything cache-first: the model config, the compiled WebGPU library, the
+tokenizer and the weights each come from the browser's Cache API when present,
+and only touch the network when missing. A model that has finished downloading
+therefore loads with no network at all. The only missing piece was the page.
+
+`public/sw.js` supplies it, under three rules:
+
+- **It answers only for the shell** — the page, the manifest, the icons. Every
+  other request, model downloads and the agent's own tool calls included, gets
+  no `respondWith` and goes to the network untouched. The worker never sees a
+  substituted credential in a response it could store, because it stores none.
+- **The page is network-first with a short timeout.** Online, the deployed
+  version always wins, so there is no update prompt to design and no stale
+  install. Offline, or when the network has not answered in 3.5 s, the last
+  good copy is served, and a late network answer still refreshes it.
+- **It deletes only its own caches.** The usual "delete every cache but mine"
+  activation step would delete the user's model weights on this origin.
+
+`src/pwa/install.js` registers it (never on `file://` or the dev server, and a
+failed registration is swallowed — a host serving only `index.html` answers
+`sw.js` with HTML) and turns `beforeinstallprompt`/`appinstalled` into the
+Install button's state. Only Chromium fires those events, so other browsers
+simply never show the button.
+
+`tests/e2e/pwa.spec.js` proves the offline claim the hard way: it stops the
+app's server outright before reloading, as well as switching Playwright
+offline, so nothing can quietly answer. Run with service workers blocked, that
+test fails with `ERR_INTERNET_DISCONNECTED`.
 
 ## UI
 

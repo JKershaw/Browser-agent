@@ -29,6 +29,7 @@ export const CurlError = Object.freeze({
   TIMEOUT: 'timeout',
   CANCELLED: 'cancelled',
   MIXED_CONTENT: 'mixed_content',
+  OFFLINE: 'offline',
   NETWORK: 'network',
   READ_FAILED: 'read_failed',
 });
@@ -486,6 +487,8 @@ function explain(kind, ctx) {
       return 'The request was cancelled before it completed. It may or may not have reached the server, so treat its effect as unknown rather than assuming nothing happened.';
     case CurlError.MIXED_CONTENT:
       return `This page is served over HTTPS, and browsers refuse to let a secure page make plain http:// requests — the request is blocked before it is sent, whatever the target server allows. Use the https:// address of ${ctx.host} if it has one, or route the request through an HTTPS CORS proxy (an http:// proxy would be blocked in exactly the same way). Running this app over http:// locally also lifts the restriction.`;
+    case CurlError.OFFLINE:
+      return `This device is offline, so the request to ${ctx.host} could not be sent. Chatting still works without a connection; fetching anything from the web needs one. Try again once the device is back online.`;
     case CurlError.NETWORK:
       return [
         // The remedy leads. Everything after it explains what went wrong; only
@@ -558,6 +561,8 @@ function failure(kind, ctx, elapsedMs, meta = {}) {
  * @param {() => number} [opts.now] Injectable clock for deterministic tests.
  * @param {string} [opts.pageProtocol] The page's own protocol, for the
  *   mixed-content check. Defaults to the real one.
+ * @param {() => boolean} [opts.isOnline] Whether the browser believes it has
+ *   a network connection. Defaults to `navigator.onLine`.
  * @returns {Promise<object>} Result object; `ok` distinguishes success.
  */
 export async function executeCurl(args, opts = {}) {
@@ -571,6 +576,7 @@ export async function executeCurl(args, opts = {}) {
     signal,
     now = () => Date.now(),
     pageProtocol = globalThis.location?.protocol,
+    isOnline = () => globalThis.navigator?.onLine !== false,
   } = opts;
 
   const started = now();
@@ -687,6 +693,17 @@ export async function executeCurl(args, opts = {}) {
       if (timedOut) return failure(CurlError.TIMEOUT, { timeoutMs }, elapsed(), { request });
       if (signal?.aborted || e?.name === 'AbortError') {
         return failure(CurlError.CANCELLED, {}, elapsed(), { request });
+      }
+      // Asked only after the request has failed, never as a gate before it:
+      // `onLine` can be false while localhost still answers, and a request
+      // that would have worked must not be refused on the browser's say-so.
+      // Once it has failed, though, "offline" is the true and actionable
+      // reading, and the CORS paragraph would send the user chasing a proxy.
+      if (!isOnline()) {
+        return failure(CurlError.OFFLINE, { host: target.hostname }, elapsed(), {
+          request,
+          detail: String(e?.message || e),
+        });
       }
       return failure(
         CurlError.NETWORK,

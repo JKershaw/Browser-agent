@@ -34,14 +34,26 @@ jobs:
       - run: npm run build
 
       # The single-file guarantee (SPEC §2.1) is a property worth asserting,
-      # not just intending: dist/ must contain index.html and nothing else.
-      - name: Assert the build is one self-contained file
+      # not just intending: the whole app is dist/index.html. Beside it sit
+      # only the installable-app files copied from public/ — a manifest, a
+      # service worker and icons — which the page works without (pwa.spec.js
+      # proves it). Anything else is a regression. Keep this list in step with
+      # PWA_FILES in tests/e2e/test-server.js.
+      - name: Assert the build is one self-contained file plus the install files
         run: |
           set -euo pipefail
           files=$(find dist -type f | sort)
           echo "$files"
-          if [ "$files" != "dist/index.html" ]; then
-            echo "::error::dist/ must contain only index.html; found:"
+          expected=$(printf '%s\n' \
+            dist/icons/apple-touch-icon.png \
+            dist/icons/icon-192.png \
+            dist/icons/icon-512.png \
+            dist/icons/icon-maskable-512.png \
+            dist/index.html \
+            dist/manifest.webmanifest \
+            dist/sw.js | sort)
+          if [ "$files" != "$expected" ]; then
+            echo "::error::dist/ must contain index.html plus the install files only; found:"
             echo "$files"
             exit 1
           fi
@@ -53,7 +65,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: browser-agent
-          path: dist/index.html
+          path: dist/
 
   e2e:
     name: End-to-end (mock engine)

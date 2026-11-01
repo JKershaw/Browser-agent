@@ -9,6 +9,15 @@
       content="A chat agent that runs entirely in your browser and can make HTTP requests on your behalf. No backend, no data leaves your device except the requests you approve."
     />
     <title>Browser Agent</title>
+    <!--
+      Installable-app metadata. These files sit beside index.html in dist/;
+      a host serving only index.html loses the Install button and offline
+      start-up, and nothing else.
+    -->
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="theme-color" content="#2563eb" />
+    <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
   </head>
   <body>
     <!-- Shown only when the capability gate blocks startup. -->
@@ -18,6 +27,8 @@
       <header class="topbar">
         <h1>Browser Agent</h1>
         <span class="spacer"></span>
+        <!-- Shown only when the browser offers to install the app. -->
+        <button class="btn btn-icon btn-install" type="button" id="install" hidden>Install</button>
         <button
           class="btn btn-icon" type="button" id="toggle-log"
           aria-controls="log-sheet" aria-expanded="false"

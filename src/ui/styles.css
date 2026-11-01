@@ -185,6 +185,7 @@ body { display: flex; flex-direction: column; }
 .btn-primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 .btn-danger { color: var(--error); border-color: var(--error); }
 .btn-icon { padding: .35rem .55rem; min-height: 2.2rem; }
+.btn-install { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
 
 /* ---------- messages ---------- */
 

@@ -93,6 +93,31 @@ so rather than leaving you to guess whether it has hung.
 
 ---
 
+## Install it as an app
+
+On Chrome or Edge — desktop, or Android — an **Install** button appears in the
+top bar once the browser is ready to offer it. One tap puts Browser Agent with
+your other apps: its own window, its own icon, no browser tabs around it. On
+Safari and Firefox the button never appears; Safari's *Add to Dock* (Mac) and
+*Share → Add to Home Screen* (iPhone, iPad) do the same job by hand.
+
+**What works offline, and what does not.** Once a model has *finished*
+downloading, the app starts and chats with no connection at all: the page
+itself is kept by a small service worker, and the model is already in the
+browser's cache. Anything that touches the web — the `curl` and `wiki` tools,
+and downloading a model you have not used before — needs a connection, and
+says so plainly when there is none rather than blaming CORS.
+
+So for a copy to use on a plane: open the app once while online, let the model
+finish loading, and install it. That is all.
+
+The service worker caches the page, its manifest and its icons, and nothing
+else. It never touches the agent's own requests — they go to the network
+exactly as they would without it — and online, the page always comes from the
+network first, so an installed copy is never stuck on an old version.
+
+---
+
 ## Deploy it yourself in two minutes
 
 1. **Fork this repository.**
@@ -117,7 +142,10 @@ The first load downloads the model. Subsequent loads are seconds.
 
 Prefer to host it elsewhere? `npm ci && npm run build` produces
 `dist/index.html`. That one file is the entire app: drop it on any static host,
-or open it directly from disk.
+or open it directly from disk. Beside it the build also writes
+`manifest.webmanifest`, `sw.js` and an `icons/` folder; host those alongside it
+and you get the Install button and offline start-up too. Leave them out and
+nothing else changes.
 
 > Opening the file from `file://` works, but browsers do not cache model weights
 > reliably on file origins, so the model may re-download every session. The app
@@ -316,6 +344,7 @@ npm run test:coverage  # with the 90% coverage gate
 npm run test:e2e       # Playwright, against the built dist/index.html
 npm run test:e2e:real  # the same, driving the real Qwen3-0.6B model
 npm run docs:prompts   # regenerate the prompt mirror in docs/prompts.md
+node scripts/make-icons.js   # re-render public/icons/ after changing the artwork
 ```
 
 **Use `npm run check` before pushing.** CI's gate is `test:coverage`, not
@@ -438,8 +467,10 @@ site's data and reload.
 
 ## Known limitations
 
-- **No offline operation.** Model weights stream from HuggingFace's CDN on first
-  use. After that the browser cache handles it, but the first run needs network.
+- **Offline is chat-only, and only after a first online visit.** Model weights
+  stream from HuggingFace's CDN on first use; after that the app and the model
+  start with no network (see [Install it as an app](#install-it-as-an-app)).
+  Web requests always need a connection.
 - **A nearly-full device may not be able to run this at all.** The app explains
   the shortfall and can reclaim what it stored, but it cannot free space it did
   not take.

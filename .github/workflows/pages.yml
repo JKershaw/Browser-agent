@@ -87,4 +87,19 @@ jobs:
             exit 1
           fi
 
+          # The install files are optional to the page but are the whole of
+          # the Install button and offline start-up. A host that answers them
+          # with the page itself (an SPA fallback) breaks both silently.
+          base="${url%/}"
+          for f in manifest.webmanifest sw.js icons/icon-192.png icons/icon-512.png; do
+            type=$(curl -sS -L --retry 5 --retry-delay 5 --retry-all-errors \
+                        -o /dev/null -w '%{http_code} %{content_type}' "$base/$f")
+            echo "$f: $type"
+            case "$type" in
+              200\ text/html*|200\ ) echo "::error::$f is served as HTML or untyped, so the app will not install."; exit 1 ;;
+              200\ *) ;;
+              *) echo "::error::$f is not being served ($type)."; exit 1 ;;
+            esac
+          done
+
           echo "The built artifact is live."

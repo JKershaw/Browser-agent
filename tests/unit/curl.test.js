@@ -431,6 +431,24 @@ describe('executeCurl — failure paths', () => {
     expect(r.detail).toContain('Failed to fetch');
   });
 
+  it('says "offline" rather than CORS when the device has no connection', async () => {
+    const fetchImpl = async () => { throw new TypeError('Failed to fetch'); };
+    const r = await executeCurl(GET(), { fetchImpl, isOnline: () => false });
+    expect(r.error.kind).toBe(CurlError.OFFLINE);
+    expect(r.error.message).toContain('offline');
+    expect(r.error.message).not.toContain('CORS');
+    // No "this URL would have worked" hint: nothing would work right now.
+    expect(r.error.retryUrl).toBeUndefined();
+    expect(r.detail).toContain('Failed to fetch');
+  });
+
+  it('still sends the request while offline — localhost can answer', async () => {
+    const fetchImpl = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    const r = await executeCurl(GET(), { fetchImpl, isOnline: () => false });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(r.ok).toBe(true);
+  });
+
   it('says the proxy may be at fault when one is configured', async () => {
     const fetchImpl = async () => { throw new TypeError('Failed to fetch'); };
     const r = await executeCurl(GET(), { fetchImpl, proxyTemplate: 'https://p.test/?url={url}' });
@@ -621,6 +639,14 @@ describe('every error class carries its own explanation, not just a code', () =>
         fetchImpl: async () => { throw new TypeError('Failed to fetch'); },
       }),
       expect: [/CORS/, /does not tell pages why/i],
+    },
+    {
+      kind: CurlError.OFFLINE,
+      run: () => executeCurl({ method: 'GET', url: 'https://a.test' }, {
+        fetchImpl: async () => { throw new TypeError('Failed to fetch'); },
+        isOnline: () => false,
+      }),
+      expect: [/device is offline/i, /a\.test/, /Chatting still works/],
     },
     {
       kind: CurlError.READ_FAILED,

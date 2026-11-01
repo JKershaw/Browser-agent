@@ -175,6 +175,7 @@ function hasSmaller(context) {
  * @param {object} [context.storage] From `estimateStorage`.
  * @param {object} [context.snapshot] From the progress tracker.
  * @param {object} [context.caps] From `detectCapabilities`.
+ * @param {boolean} [context.online] `navigator.onLine` at the time of failure.
  * @param {string} [context.userAgent]
  * @param {string} [context.pageUrl]
  * @param {string} [context.timestamp]
@@ -230,6 +231,21 @@ export function diagnoseLoadError(error, context = {}) {
       break;
 
     case LoadErrorKind.NETWORK:
+      // Offline is the one network failure with a certain cause and a certain
+      // remedy. A model that has finished downloading loads without any
+      // network, so reaching here offline means this one has not.
+      if (context.online === false) {
+        out = {
+          title: 'This device is offline',
+          explain:
+            'This model has not finished downloading to this device yet, so it needs a connection to continue. A model that has downloaded completely loads and chats without one.',
+          advice: [
+            'Reconnect and try again. Everything already downloaded is kept, so the retry resumes rather than restarting.',
+          ],
+          actions: { retry: true, smallerModel: false, freeSpace: false, clearData: false },
+        };
+        break;
+      }
       out = {
         title: 'The download did not finish',
         explain:

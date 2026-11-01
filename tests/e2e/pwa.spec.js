@@ -67,6 +67,16 @@ test('after one visit, the app starts and chats with the server gone', async ({ 
   await appServer.stop();
   await page.context().setOffline(true);
 
+  // The network really is gone (the server is stopped), but the browser's
+  // *report* of it is pinned explicitly. Under Playwright's offline emulation,
+  // Chromium 151 (CI's browser) says `navigator.onLine === true` in any page
+  // the service worker serves — after a reload, in a new tab, after a fresh
+  // goto — while Chromium 153 says false. A real offline device reports false;
+  // what is under test is that the app says so at boot when it does.
+  await page.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, 'onLine', { configurable: true, get: () => false });
+  });
+
   // Same URL, so the mock engine is configured the same way; the script
   // restarts with the fresh page.
   await page.reload();

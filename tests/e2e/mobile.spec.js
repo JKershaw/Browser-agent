@@ -129,7 +129,7 @@ test('a small-memory phone is offered the small model with a reason', async ({ p
 
   await expect(page.locator('#messages')).toContainText(/small model is pre-selected/);
   await page.locator('#toggle-settings').click();
-  await expect(page.locator('select')).toHaveValue(/1\.7B|0\.6B/);
+  await expect(page.locator('.model-row-active')).toHaveAttribute('data-model-id', /1\.7B|0\.6B/);
 });
 
 test('the loading card fits a phone and stays on screen', async ({ page, appServer }) => {

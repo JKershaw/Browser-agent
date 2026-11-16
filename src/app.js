@@ -23,6 +23,7 @@ import {
   pickDefaultModel,
   smallerModelsThan,
 } from './llm/webllm.js';
+import { buildChatRecord, createChatStore, newChatId } from './state/chats.js';
 import { createRequestLog } from './state/log.js';
 import { createSettingsStore } from './state/settings.js';
 
@@ -55,15 +56,35 @@ export function wantsMockEngine(search = globalThis.location?.search || '') {
  * @param {object} [opts.navigator]
  * @param {(call: object) => Promise<object>} [opts.confirm]
  * @param {object} [opts.hooks] Forwarded to the agent loop.
+ * @param {() => number} [opts.now] Clock, for saved-chat timestamps.
  * @returns {object}
  */
 export function createApp(opts = {}) {
   const notices = [];
+  const now = opts.now ?? (() => Date.now());
   const settings = createSettingsStore({
     storage: opts.storage,
     onStorageError: (msg) => notices.push({ kind: 'warning', text: msg }),
   });
   const log = createRequestLog();
+
+  /**
+   * Chat-store problems surface in the conversation when there is one to put
+   * them in, and in the start-up notices otherwise.
+   * @param {{kind: string, text: string}} n
+   */
+  const chatNotice = (n) => {
+    if (typeof opts.hooks?.onNotice === 'function') opts.hooks.onNotice(n);
+    else notices.push(n);
+  };
+  const chats = createChatStore({
+    storage: opts.storage,
+    onStorageError: (text) => chatNotice({ kind: 'warning', text }),
+    onPruned: (text) => chatNotice({ kind: 'info', text }),
+  });
+
+  /** The conversation on screen: its id, and when it began. */
+  let currentChat = { id: newChatId(), createdAt: now() };
 
   const engine = assertEngine(
     opts.engine || (wantsMockEngine()
@@ -172,10 +193,52 @@ export function createApp(opts = {}) {
           log.deny(openEntry.id, 'The turn ended before this request was sent.');
           openEntry = null;
         }
+        // Saved after every turn, however it ended, so a closed tab or a new
+        // chat never loses the conversation.
+        saveCurrentChat();
         opts.hooks?.onTurnEnd?.(payload);
       },
     },
   });
+
+  /**
+   * Save the conversation on screen, if there is anything in it.
+   *
+   * Never throws: a chat that fails to save must not break the turn that
+   * triggered the save. The store reports its own storage failures.
+   *
+   * @returns {boolean} Whether a record was written.
+   */
+  function saveCurrentChat() {
+    try {
+      const transcript = loop.transcript;
+      if (!transcript.some((m) => m.role === 'user')) return false;
+      return chats.save(buildChatRecord({
+        id: currentChat.id,
+        createdAt: currentChat.createdAt,
+        updatedAt: now(),
+        modelId: engine.stats().modelId,
+        transcript,
+        // Session-only credentials included: "never written to disk" covers
+        // a response body that happens to echo one.
+        credentials: settings.get().credentials,
+      }));
+    } catch {
+      return false;
+    }
+  }
+
+  /** Cancel the running turn, if any, and wait for it to unwind. */
+  async function stopTurn() {
+    if (!loop.getState().running) return;
+    loop.cancel();
+    await loop.whenIdle();
+  }
+
+  function startFresh() {
+    loop.reset();
+    currentChat = { id: newChatId(), createdAt: now() };
+  }
 
   return {
     settings,
@@ -310,6 +373,70 @@ export function createApp(opts = {}) {
 
     /** All models offered in the picker, spec tiers first. */
     tiers: MODEL_TIERS,
+
+    /** Saved conversations (`state/chats.js`). */
+    chats,
+
+    /** @returns {string} Id of the conversation on screen. */
+    currentChatId: () => currentChat.id,
+
+    /** Save the conversation on screen now. */
+    saveCurrentChat,
+
+    /**
+     * Start an empty conversation. The current one is saved first, and a
+     * running turn is cancelled and allowed to finish unwinding before the
+     * transcript is cleared.
+     *
+     * @returns {Promise<{savedPrevious: boolean}>}
+     */
+    async newChat() {
+      await stopTurn();
+      const savedPrevious = saveCurrentChat();
+      startFresh();
+      return { savedPrevious };
+    },
+
+    /**
+     * Reopen a saved conversation, so the next message carries on from it.
+     *
+     * @param {string} id
+     * @returns {Promise<object|null>} The record, or null if it is gone (for
+     *   instance, deleted in another tab).
+     */
+    async openChat(id) {
+      const record = chats.get(id);
+      if (!record) return null;
+      await stopTurn();
+      saveCurrentChat();
+      loop.restore(record.transcript);
+      currentChat = { id: record.id, createdAt: record.createdAt };
+      return record;
+    },
+
+    /**
+     * Delete a saved conversation. Deleting the one on screen also clears
+     * it — otherwise the next reply would quietly save it again.
+     *
+     * @param {string} id
+     * @returns {Promise<{wasCurrent: boolean}>}
+     */
+    async deleteChat(id) {
+      const wasCurrent = id === currentChat.id;
+      // Stopped *before* the delete: the cancelled turn's own save would
+      // otherwise put it straight back.
+      if (wasCurrent) await stopTurn();
+      chats.remove(id);
+      if (wasCurrent) startFresh();
+      return { wasCurrent };
+    },
+
+    /** Delete every saved conversation, including the one on screen. */
+    async deleteAllChats() {
+      await stopTurn();
+      chats.clear();
+      startFresh();
+    },
   };
 }
 

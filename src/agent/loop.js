@@ -163,7 +163,8 @@ export function toEngineMessages(transcript, systemPrompt) {
  *        Shows the confirmation card. Required when confirmation is enabled.
  * @param {object} [deps.hooks] Observation callbacks; all optional.
  * @param {object} [deps.session] Mutable per-session state (auto-approved hosts).
- * @returns {{run: Function, cancel: Function, getState: Function, transcript: Array, reset: Function}}
+ * @returns {{run: Function, cancel: Function, getState: Function, transcript: Array, reset: Function,
+ *            restore: Function, whenIdle: Function}}
  */
 export function createAgentLoop(deps) {
   const {
@@ -192,6 +193,14 @@ export function createAgentLoop(deps) {
   };
 
   let controller = null;
+
+  /**
+   * Settles when the current turn has fully unwound — every hook fired, the
+   * state back to idle. Starting a new chat cancels the running turn first and
+   * waits on this, so the cancelled turn's last events land on the old chat
+   * rather than on the empty one replacing it.
+   */
+  let idle = Promise.resolve();
 
   const emit = (name, payload) => {
     const fn = hooks[name];
@@ -230,6 +239,10 @@ export function createAgentLoop(deps) {
   async function run(userText) {
     if (state.running) throw new Error('An agent turn is already running.');
 
+    let markIdle = () => {};
+    idle = new Promise((resolve) => {
+      markIdle = resolve;
+    });
     controller = new AbortController();
     const settings0 = getSettings();
     setState({
@@ -260,6 +273,7 @@ export function createAgentLoop(deps) {
       return finish(reason);
     } finally {
       setState({ running: false, pendingConfirmation: null });
+      markIdle();
     }
   }
 
@@ -367,7 +381,12 @@ export function createAgentLoop(deps) {
           // actually sent. The pass loop still bounds the turn.
           setState({ denials: state.denials + 1 });
           emit('onToolDenied', { call: parsed.call, reason: decision.reason });
-          push('tool', denialMessage(parsed.call.args, decision.reason), { denied: true, call: parsed.call });
+          push('tool', denialMessage(parsed.call.args, decision.reason), {
+            denied: true,
+            call: parsed.call,
+            // Kept so a reopened chat's card says why, as the live one did.
+            ...(decision.reason ? { reason: decision.reason } : {}),
+          });
           continue;
         }
 
@@ -514,11 +533,43 @@ export function createAgentLoop(deps) {
       emit('onNotice', { kind: 'info', text: 'Cancelled.' });
     },
     getState: () => ({ ...state, autoApprovedHosts: [...session.autoApprovedHosts] }),
+
+    /** @returns {Promise<void>} Resolves once no turn is running. */
+    whenIdle: () => idle,
+
+    /**
+     * Start an empty conversation. Auto-approved hosts go too: "for the rest
+     * of this session" was said about the conversation the user was looking
+     * at, not about whatever they start next.
+     */
     reset() {
+      if (state.running) throw new Error('Cannot reset while an agent turn is running.');
       transcript.length = 0;
       session.autoApprovedHosts.clear();
       setState({ iteration: 0, repairs: 0, denials: 0, stopReason: null, pendingConfirmation: null });
     },
+
+    /**
+     * Replace the conversation with a saved one, so the next message carries
+     * on from it. Entries are copied, and anything without a role the engine
+     * understands is skipped rather than sent. Auto-approvals are cleared, as
+     * for `reset`: they were granted in a different conversation.
+     *
+     * @param {Array<{role: string, content: string, meta?: object}>} entries
+     */
+    restore(entries) {
+      if (state.running) throw new Error('Cannot restore a chat while an agent turn is running.');
+      transcript.length = 0;
+      for (const e of Array.isArray(entries) ? entries : []) {
+        if (!e || !['user', 'assistant', 'tool'].includes(e.role) || typeof e.content !== 'string') continue;
+        transcript.push(e.meta && typeof e.meta === 'object'
+          ? { role: e.role, content: e.content, meta: e.meta }
+          : { role: e.role, content: e.content });
+      }
+      session.autoApprovedHosts.clear();
+      setState({ iteration: 0, repairs: 0, denials: 0, stopReason: null, pendingConfirmation: null });
+    },
+
     transcript,
   };
 }

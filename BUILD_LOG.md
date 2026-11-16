@@ -1540,3 +1540,64 @@ service workers blocked, it fails with `ERR_INTERNET_DISCONNECTED`, so its pass
 is not the network quietly answering. Not verified here: a real install on a
 device, and an offline load of real weights (needs a GPU). The WebLLM reading
 above is why the latter is expected to hold.
+
+## Switch models from settings; start, keep and reopen chats
+
+Asked for so that someone could see which models are on the device and move
+between them without a reload, and start a fresh conversation without losing
+the one they were in.
+
+Built:
+
+- **The model picker is now a list.** Every tier, plus any id loaded through
+  the advanced field, is a row marked *in use*, *loading*, *downloaded*,
+  *not downloaded* or *failed to load*, with **Switch** (or **Download**),
+  **Reload** for the model in use, and **Delete** for a downloaded
+  one that is not. A summary line says what is in use and how much is
+  downloaded. Switching is one click — the old picker took a selection and then
+  a separate Load button — and is written to settings so the next start loads
+  the same model.
+- **New chat**, in the top bar and in **Settings → Chats**.
+- `src/state/chats.js`: conversations saved to `localStorage` after every turn,
+  newest 50 kept. **Settings → Chats** lists them to open, delete, or delete
+  all. Opening one restores the loop's transcript (`loop.restore()`), so the
+  model is sent the earlier conversation on the next message, and redraws it
+  with `chat.replay()`, tool cards included.
+- The mock engine now remembers which models it has "downloaded", as WebLLM's
+  cache does, so switching back to a model takes the cached path in the e2e
+  suite as it would for real.
+
+Decisions:
+
+- **Saved automatically, not on request.** "Old ones can be saved" is met by
+  never losing one: a save after every turn means a closed tab costs nothing
+  either. An empty chat is never saved.
+- **Redacted before it is written.** A tool result's response body can echo a
+  credential back, and the list the chat pane masks it with is non-enumerable
+  precisely so that it does not survive serialisation — which here would mean
+  writing the plaintext and losing the means to mask it. Every string in the
+  record is masked against that list and every stored credential, session-only
+  included, before it reaches storage.
+- **Each write is read-modify-write.** Two open tabs each hold a copy of the
+  list; writing a whole copy back silently deletes the other tab's chats or
+  resurrects ones it deleted.
+- **A full quota costs the oldest chats.** If even the one being saved will not
+  fit alone, it stays in memory for the session and the user is told once.
+- **New and reopened chats forget auto-approved hosts.** The card says "for the
+  rest of this session", and a different conversation is a different session
+  for that purpose. It costs a click; the opposite mistake costs an unasked
+  request.
+- **A running turn is cancelled and awaited first** (`loop.whenIdle()`), so its
+  last events and its save land on the old chat. Done the other way round, a
+  cancelled turn's save put a just-deleted chat straight back.
+- **The loading card survives a new chat.** It is re-attached after the pane is
+  cleared; otherwise a new chat during the first download leaves a disabled
+  composer and nothing to say why.
+- **The token count in the stats bar is now per conversation**, as SPEC §8.3
+  describes it, by taking a baseline at each new chat and model load.
+
+Verification: 868 unit tests (55 new, including the echo-a-credential case
+end-to-end through `createApp`), coverage gate holding (`chats.js` 98%
+statements); nine new e2e tests in `chats-models.spec.js`, among them the same
+echo case against the real test server, checking `localStorage` itself; three
+existing e2e tests updated from the `<select>` to the list.

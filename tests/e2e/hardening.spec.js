@@ -164,7 +164,7 @@ test('settings persist across a reload; session-only credentials do not', async 
   await page.getByRole('button', { name: 'Add credential' }).click();
 
   await expect(page.locator('.cred')).toHaveCount(2);
-  await expect(page.locator('.badge')).toContainText('session only');
+  await expect(page.locator('.cred .badge')).toContainText('session only');
 
   // Nothing session-only reached storage.
   const stored = await page.evaluate(() => localStorage.getItem('browser-agent.settings.v1'));

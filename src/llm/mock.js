@@ -30,8 +30,11 @@ import { emptyStats } from './engine.js';
  *   failing, so the error arrives against a part-filled progress bar rather
  *   than an empty one.
  * @param {number} [opts.totalMb] Simulated download size.
- * @param {boolean} [opts.cached] Pretend the model is already downloaded, so
+ * @param {boolean} [opts.cached] Pretend every model is already downloaded, so
  *   `load` skips the fetch pass and the loading UI takes its cached path.
+ *   Without it, a model counts as downloaded once it has loaded successfully
+ *   and until it is deleted — as WebLLM's cache behaves — so switching back
+ *   to a model takes the cached path the second time.
  * @returns {import('./engine.js').Engine & {calls: Array<object>, setScript: Function}}
  */
 export function createMockEngine(opts = {}) {
@@ -44,6 +47,11 @@ export function createMockEngine(opts = {}) {
   let modelId = null;
   let callIndex = 0;
   let totalTokens = 0;
+  /** Models downloaded by this instance. */
+  const downloaded = new Set();
+  /** Models deleted since, which `opts.cached` no longer covers. */
+  const deleted = new Set();
+  const cachedNow = (id) => downloaded.has(id) || (Boolean(opts.cached) && !deleted.has(id));
 
   const sleep = (ms) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
 
@@ -67,14 +75,19 @@ export function createMockEngine(opts = {}) {
     },
 
     /**
-     * Nothing is cached by default, so the loading UI takes its first-run
-     * path; `opts.cached` flips it so the cached path is testable too.
+     * Nothing is cached at first by default, so the loading UI takes its
+     * first-run path; `opts.cached` flips it so the cached path is testable
+     * from the start.
+     * @param {string} id
      */
-    async isCached() {
-      return Boolean(opts.cached);
+    async isCached(id) {
+      return cachedNow(id);
     },
 
-    async deleteFromCache() {
+    /** @param {string} id */
+    async deleteFromCache(id) {
+      downloaded.delete(id);
+      deleted.add(id);
       return true;
     },
 
@@ -88,6 +101,7 @@ export function createMockEngine(opts = {}) {
      * one users get.
      */
     async load(id, onProgress) {
+      const cached = cachedNow(id);
       const STEPS = 20;
       const step = loadMs > 0 ? loadMs / STEPS : 0;
       const shards = 38;
@@ -98,7 +112,7 @@ export function createMockEngine(opts = {}) {
 
       // Download — skipped entirely for a cached model, exactly as WebLLM
       // skips it: the first report is then the cache read below.
-      if (!opts.cached) {
+      if (!cached) {
         for (let i = 1; i <= 12; i += 1) {
           const fraction = i / 12;
           if (opts.failLoad && fraction >= failAt) {
@@ -142,6 +156,8 @@ export function createMockEngine(opts = {}) {
 
       emit('Finish loading on WebGPU - mock', 1);
       modelId = id;
+      downloaded.add(id);
+      deleted.delete(id);
     },
 
     async generate(messages, options = {}) {

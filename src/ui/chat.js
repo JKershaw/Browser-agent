@@ -413,6 +413,56 @@ export function createChatPane(root) {
         el('span', { text: notice.text }),
       ]));
     },
+
+    /**
+     * Re-render a saved conversation from its transcript.
+     *
+     * Mirrors what the live hooks in `main.js` draw for the same entries, so a
+     * reopened chat looks as it did: the typed message once for a split ask,
+     * then step markers; one card per tool call, settled or denied as it was.
+     * Notices are not part of a transcript and do not come back.
+     *
+     * @param {Array<{role: string, content: string, meta?: object}>} transcript
+     */
+    replay(transcript) {
+      const entries = Array.isArray(transcript) ? transcript : [];
+      for (let i = 0; i < entries.length; i += 1) {
+        const m = entries[i];
+        try {
+          if (m.role === 'user') {
+            const step = m.meta?.step;
+            if (!step) this.addUserMessage(m.content);
+            else if (step.index === 0) this.addUserMessage(step.original);
+            else this.addStepMessage(m.content, step.index + 1, step.total);
+          } else if (m.role === 'assistant' && m.meta?.toolCall) {
+            const next = entries[i + 1];
+            // A repeat of a failed call was refused before any card was drawn;
+            // its tool entry renders as the notice the user saw instead.
+            if (next?.role === 'tool' && next.meta?.repeated) continue;
+            const card = this.addToolCard(m.meta.toolCall);
+            if (next?.role === 'tool') {
+              i += 1;
+              if (next.meta?.denied) card.deny(next.meta.reason);
+              else if (next.meta?.result) card.settle(next.meta.result);
+              else card.deny('No record of this request’s outcome was saved.');
+            } else {
+              card.deny('The turn ended before this request was sent.');
+            }
+          } else if (m.role === 'assistant') {
+            this.addAssistantMessage(m.content, m.meta || {});
+          } else if (m.role === 'tool' && m.meta?.repeated) {
+            const args = m.meta.call?.args || {};
+            this.addNotice({
+              kind: 'info',
+              text: `Not sent: ${args.method || 'GET'} ${args.url || ''} already failed in this turn.`,
+            });
+          }
+        } catch {
+          // One malformed entry must not blank the rest of the conversation.
+        }
+      }
+      root.scrollTop = root.scrollHeight;
+    },
   };
 }
 

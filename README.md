@@ -227,8 +227,8 @@ budget.
 
 | Setting | Default | What it does |
 |---|---|---|
-| **Model** | Qwen3 4B, or 1.7B on a constrained device | Which model to load. Download size and cache status are shown per model. |
-| **Advanced: model id** | — | Pin any model from WebLLM's prebuilt catalog by id. |
+| **Models** | Qwen3 4B, or 1.7B on a constrained device | Every model, marked *in use*, *downloaded* or *not downloaded*, with its download size. **Switch** loads another (one model is in memory at a time) and is remembered for next time; **Delete** frees a downloaded model's storage. |
+| **Advanced: model id** | — | Load any model from WebLLM's prebuilt catalog by id. It then appears in the list. |
 | **Thinking mode** | off | Lets Qwen3 reason before answering. Roughly triples the latency of every tool round-trip. |
 | **Temperature** | 0.6 | Sampling temperature, 0–2. |
 | **Max tokens per reply** | 1024 | Generation limit per reply. |
@@ -239,6 +239,19 @@ budget.
 | **Confirm before sending** | **on** | Show an approve/deny card for every request. |
 | **Domain allowlist** | empty | When non-empty, requests to any other host are refused before being sent. |
 | **Credentials** | none | Named secrets. See [Credentials](#credentials). |
+| **Chats** | — | Saved conversations, newest first: **Open** one to carry on from it, or delete one or all. |
+
+### Chats
+
+**New chat** in the top bar starts an empty conversation. The one you were in
+is not lost: every conversation is saved in this browser after each reply (the
+newest 50 are kept), and **Settings → Chats** lists them to reopen or delete.
+A reopened chat carries on where it left off — the model is sent the whole
+earlier conversation. Starting or reopening a chat also forgets any hosts you
+auto-approved, and a reply still being written is stopped first.
+
+Saved chats include the responses the agent fetched, with your credential
+values masked out — session-only ones too.
 
 Settings are saved in your browser's `localStorage`. If that is unavailable
 (private mode, full quota) the app keeps working and tells you the settings
@@ -322,6 +335,9 @@ Some deliberate properties:
 - **Persistent credentials are stored in `localStorage` in plain text.** Anyone
   with access to this browser profile can read them. Use **session only** for
   anything sensitive: those live in memory and vanish when you close the tab.
+- **Saved chats are plain text in `localStorage` too.** Credential values are
+  masked before saving, but anything else a fetched page contained is kept.
+  Delete chats you would not want someone with this browser profile to read.
 - **Nothing leaves your browser except the requests you approve.** No telemetry,
   no analytics, no backend.
 - **On a public URL, the app is same-origin with every other page on that host.**
@@ -487,8 +503,9 @@ site's data and reload.
   Wikipedia suite, with the residual failures being wrong readings of a
   correct response rather than broken calls. `npm run eval` is how those
   numbers are produced, and re-produced after any prompt change.
-- **No conversation persistence.** Reload and you start fresh. The request log
-  is in-memory only, by design.
+- **Chats are saved, the request log is not.** Conversations are kept in this
+  browser (see [Chats](#chats)); the request log is in-memory only, by design,
+  and starts empty on every reload.
 - **Plain `http://` targets do not work from the hosted site.** That is the
   browser's mixed-content rule, not a choice this app makes; see
   [CORS and proxies](#cors-and-proxies).

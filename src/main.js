@@ -19,6 +19,7 @@ import { createLoadTracker } from './llm/progress.js';
 import { formatSize } from './llm/format.js';
 import { el } from './ui/dom.js';
 import { createInstallPrompt, isStandalone, registerServiceWorker } from './pwa/install.js';
+import { CHATS_KEY } from './state/chats.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -28,6 +29,15 @@ const stats = createStatsBar($('#statsbar'));
 /** Tool card for the call currently in flight. */
 let activeCard = null;
 let modelLoaded = false;
+
+/** Built in boot(), after the capability gate. */
+let settingsSheet = null;
+
+/**
+ * The engine's token count when the conversation on screen began. The engine
+ * counts from its last model load; the stats bar shows this conversation.
+ */
+let tokenBase = 0;
 
 const app = createApp({
   confirm: (call, credentialUse) => chat.confirm(call, app.settings.get().credentials, credentialUse),
@@ -81,7 +91,7 @@ const app = createApp({
       stats.update({
         prefill: st.prefillTokensPerSecond,
         decode: st.decodeTokensPerSecond,
-        tokens: st.totalTokens,
+        tokens: Math.max(0, st.totalTokens - tokenBase),
       });
 
       // A turn can end between proposing a call and dispatching it — cancelled
@@ -154,6 +164,105 @@ input.addEventListener('keydown', (e) => {
 stopBtn.addEventListener('click', () => {
   app.loop.cancel();
   chat.dismissConfirm();
+});
+
+/* ------------------------------------------------------------------ *
+ * chats
+ * ------------------------------------------------------------------ */
+
+/** The hint every empty chat starts with. */
+function showWelcome() {
+  if (wantsMockEngine()) {
+    chat.addNotice({
+      kind: 'warning',
+      text: 'Mock engine active (?mockEngine=1). Replies are scripted, not generated — this mode exists for the test suite. Remove the parameter to use the real model.',
+    });
+  }
+  chat.addNotice({
+    kind: 'info',
+    text: 'Ask for something on the web and the agent will offer to fetch it. Every request needs your approval first.',
+  });
+}
+
+/**
+ * Clear the conversation pane and refill it.
+ *
+ * The loading card is the app's, not the conversation's: a download in
+ * progress, or the report of one that failed, is put back at the end — the
+ * composer stays disabled until a model loads, and without the card nothing
+ * would say why.
+ *
+ * @param {() => void} fill
+ */
+function rebuildChat(fill) {
+  activeCard = null;
+  chat.clear();
+  fill();
+  const card = loading.node();
+  if (card) chat.addNode(card);
+  tokenBase = app.engine.stats().totalTokens;
+  stats.update({ tokens: 0, iteration: 0, lastToolMs: null });
+  settingsSheet?.render();
+  chat.scrollToEnd();
+}
+
+async function startNewChat() {
+  // Cancels a running turn (synchronously, inside newChat) and then closes
+  // its confirmation card, in the same order as the Stop button.
+  const pending = app.newChat();
+  chat.dismissConfirm();
+  const { savedPrevious } = await pending;
+  rebuildChat(() => {
+    if (savedPrevious) {
+      chat.addNotice({ kind: 'info', text: 'New chat started. The previous one is saved under Settings → Chats.' });
+    }
+    showWelcome();
+  });
+  closeSheets();
+  if (!input.disabled) input.focus();
+}
+
+/** @param {string} id */
+async function openSavedChat(id) {
+  const pending = app.openChat(id);
+  chat.dismissConfirm();
+  const record = await pending;
+  if (!record) {
+    chat.addNotice({ kind: 'warning', text: 'That chat is no longer saved — it may have been deleted in another tab.' });
+    settingsSheet?.render();
+    return;
+  }
+  rebuildChat(() => {
+    chat.addNotice({ kind: 'info', text: `Reopened “${record.title}”. Carry on where it left off.` });
+    chat.replay(app.loop.transcript);
+  });
+  closeSheets();
+  if (!input.disabled) input.focus();
+}
+
+/** @param {string} id */
+async function deleteSavedChat(id) {
+  const isCurrent = id === app.currentChatId();
+  const pending = app.deleteChat(id);
+  if (isCurrent) chat.dismissConfirm();
+  const { wasCurrent } = await pending;
+  if (wasCurrent) rebuildChat(showWelcome);
+}
+
+async function deleteAllChats() {
+  const pending = app.deleteAllChats();
+  chat.dismissConfirm();
+  await pending;
+  rebuildChat(showWelcome);
+}
+
+$('#new-chat').addEventListener('click', () => {
+  startNewChat().catch((e) => chat.addNotice({ kind: 'error', text: `Could not start a new chat: ${e?.message || e}` }));
+});
+
+// Another tab saved or deleted a chat: show the list as storage now has it.
+globalThis.addEventListener?.('storage', (e) => {
+  if (e.key === null || e.key === CHATS_KEY) app.chats.refresh();
 });
 
 /* ------------------------------------------------------------------ *
@@ -276,6 +385,10 @@ async function loadModel(modelId) {
   const mySeq = loadSeq;
   const current = () => mySeq === loadSeq;
 
+  // Loading unloads whatever was on the GPU first, so nothing is "in use"
+  // until this finishes.
+  settingsSheet?.setModelState({ activeId: null, loadingId: modelId, failedId: null });
+
   const cached = app.engine.isCached
     ? await app.engine.isCached(modelId).catch(() => false)
     : false;
@@ -322,6 +435,11 @@ async function loadModel(modelId) {
     stats.setLoading(null);
     stats.setModel(modelId);
     setBusy(false);
+    // The engine's count restarts with a new model; so does the baseline.
+    tokenBase = app.engine.stats().totalTokens;
+    settingsSheet?.setModelState({ activeId: modelId, loadingId: null, failedId: null });
+    // A first load has just downloaded it.
+    settingsSheet?.refreshCache([modelId]).catch(() => {});
     chat.addNotice({ kind: 'info', text: `${modelId} is ready.` });
   } catch (e) {
     // A superseded load's failure is not news — the user has already moved on
@@ -330,6 +448,9 @@ async function loadModel(modelId) {
     stopLoadingTimer();
     stats.setLoading(null);
     stats.setModel(modelId);
+    settingsSheet?.setModelState({ activeId: null, loadingId: null, failedId: modelId });
+    // A half-finished download may or may not count as cached; ask again.
+    settingsSheet?.refreshCache([modelId]).catch(() => {});
     await reportLoadFailure(e, modelId, tracker.snapshot());
   }
 }
@@ -400,32 +521,29 @@ async function boot() {
     chat.addNotice({ kind: 'warning', text: OFFLINE_NOTICE });
   }
 
-  if (wantsMockEngine()) {
-    chat.addNotice({
-      kind: 'warning',
-      text: 'Mock engine active (?mockEngine=1). Replies are scripted, not generated — this mode exists for the test suite. Remove the parameter to use the real model.',
-    });
-  }
-
   for (const n of app.notices) chat.addNotice(n);
 
-  createSettingsSheet($('#settings-body'), {
+  settingsSheet = createSettingsSheet($('#settings-body'), {
     settings: app.settings,
     caps,
     isCached: app.engine.isCached ? (id) => app.engine.isCached(id) : undefined,
+    onDeleteModel: (id) => app.deleteCachedModel(id),
     onLoadModel: (id) => {
       closeSheets();
       return loadModel(id);
     },
+    chats: app.chats,
+    getCurrentChatId: () => app.currentChatId(),
+    onNewChat: () => startNewChat(),
+    onOpenChat: (id) => openSavedChat(id),
+    onDeleteChat: (id) => deleteSavedChat(id),
+    onDeleteAllChats: () => deleteAllChats(),
   });
 
   if (model.reason) chat.addNotice({ kind: 'info', text: model.reason });
   app.settings.set({ modelId: model.id });
 
-  chat.addNotice({
-    kind: 'info',
-    text: 'Ask for something on the web and the agent will offer to fetch it. Every request needs your approval first.',
-  });
+  showWelcome();
 
   await loadModel(model.id);
   input.focus();

@@ -878,3 +878,88 @@ describe('agent loop — multi-step asks (the chain-driver)', () => {
     expect(exec).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('agent loop — switching conversations', () => {
+  it('restore() replaces the transcript, and the next turn builds on it', async () => {
+    const { loop, engine } = makeLoop({ script: ['carried on'] });
+    loop.restore([
+      { role: 'user', content: 'earlier question' },
+      { role: 'assistant', content: 'earlier answer' },
+      { role: 'system', content: 'not a role the transcript holds' },
+      null,
+      { role: 'tool', content: 'TOOL RESULT', meta: { denied: true } },
+    ]);
+    expect(loop.transcript.map((m) => m.role)).toEqual(['user', 'assistant', 'tool']);
+    expect(loop.transcript[2].meta).toEqual({ denied: true });
+
+    await loop.run('and now?');
+    const sent = engine.calls[0].messages.map((m) => m.content);
+    expect(sent).toContain('earlier question');
+    expect(sent).toContain('earlier answer');
+    expect(sent).not.toContain('not a role the transcript holds');
+  });
+
+  it('restore() copies entries rather than adopting the caller\'s array', () => {
+    const { loop } = makeLoop();
+    const saved = [{ role: 'user', content: 'x' }];
+    loop.restore(saved);
+    loop.transcript.push({ role: 'assistant', content: 'y' });
+    expect(saved).toHaveLength(1);
+  });
+
+  it('restore() clears auto-approved hosts', async () => {
+    const { loop } = makeLoop({
+      script: [toolCall(), 'done'],
+      settings: { confirmBeforeSend: true },
+      confirm: async () => ({ approved: true, rememberHost: true }),
+    });
+    await loop.run('go');
+    expect(loop.getState().autoApprovedHosts).toHaveLength(1);
+    loop.restore([]);
+    expect(loop.getState().autoApprovedHosts).toEqual([]);
+  });
+
+  it('reset() and restore() refuse to run under a live turn', async () => {
+    let release;
+    const { loop, engine } = makeLoop();
+    engine.generate = () => new Promise((r) => { release = r; });
+    const turn = loop.run('go');
+    expect(() => loop.reset()).toThrow(/running/);
+    expect(() => loop.restore([])).toThrow(/running/);
+    release('done');
+    await turn;
+  });
+
+  it('whenIdle() resolves once a cancelled turn has fully unwound', async () => {
+    const ended = vi.fn();
+    const { loop, engine } = makeLoop({ hooks: { onTurnEnd: ended } });
+    engine.generate = (_m, opts) => new Promise((_r, reject) => {
+      opts.signal.addEventListener('abort', () => {
+        const e = new Error('aborted');
+        e.name = 'AbortError';
+        reject(e);
+      });
+    });
+    loop.run('go');
+    loop.cancel();
+    await loop.whenIdle();
+    expect(loop.getState().running).toBe(false);
+    expect(ended).toHaveBeenCalledWith(expect.objectContaining({ stopReason: StopReason.CANCELLED }));
+  });
+
+  it('whenIdle() resolves immediately when nothing is running', async () => {
+    const { loop } = makeLoop();
+    await expect(loop.whenIdle()).resolves.toBeUndefined();
+  });
+
+  it('a denial records its reason, so a reopened chat can show it', async () => {
+    const { loop } = makeLoop({
+      script: [toolCall(), 'ok'],
+      settings: { confirmBeforeSend: true },
+      confirm: async () => ({ approved: false, reason: 'Not that host.' }),
+    });
+    await loop.run('go');
+    const denied = loop.transcript.find((m) => m.role === 'tool');
+    expect(denied.meta).toMatchObject({ denied: true, reason: 'Not that host.' });
+  });
+});

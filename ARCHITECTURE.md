@@ -51,11 +51,13 @@ src/
     format.js       Sizes, rates and durations for humans. Pure.
   state/
     settings.js     localStorage-backed settings, session-only credentials.
+    chats.js        Saved conversations: redaction before storage, quota
+                    pruning, read-modify-write so two tabs do not clobber.
     log.js          In-memory request log, masked, JSON-exportable.
   ui/
     dom.js          The only element factory. textContent only, no innerHTML.
     chat.js         Messages, streaming, tool cards, confirmation cards.
-    settings.js     Settings sheet.
+    settings.js     Settings sheet, including the model list and saved chats.
     logview.js      Request log view.
     stats.js        Stats bar.
     gate.js         WebGPU capability screen.
@@ -399,6 +401,42 @@ The page URL is included as origin and path only: the report is written to be
 pasted into a public tracker, and the app cannot vouch for what is in a query
 string.
 
+## Switching models, and keeping chats
+
+**Models.** The settings sheet lists every known tier, plus any id loaded
+through the advanced field, each marked *in use*, *loading*, *downloaded* or
+*not downloaded*. Only one model is ever on the GPU: `webllm.js` unloads the
+current engine before creating the next, so "switch" is simply `loadModel()`
+with a different id, and the row it came from loses its *in use* badge the
+moment loading starts. `main.js` reports the load's state to the sheet; the
+downloaded state comes from `isCached()` and is re-asked after each load and
+each deletion. Switching also writes `modelId` to settings, so the next start
+loads the model last chosen. The model in use has no Delete button — its
+weights are on the GPU, and a re-download would follow the next reload.
+
+**Chats.** The conversation is saved to `localStorage` after every turn
+(`app.js`, in its `onTurnEnd` wrapper), however the turn ended, so neither a
+new chat nor a closed tab loses it. *New chat* saves, then clears the loop's
+transcript; reopening a chat calls `loop.restore()` with the saved transcript,
+so the next message carries on from it, and `chat.replay()` redraws it from
+the same entries the live hooks draw from. Both clear auto-approved hosts: an
+approval given "for the rest of this session" was given in a different
+conversation.
+
+Three things are easy to get wrong here:
+
+- **A running turn is cancelled and awaited before anything is cleared**
+  (`loop.whenIdle()`). Cleared first, the cancelled turn's last events — its
+  `onTurnEnd`, its save — would land on the empty chat replacing it, or put a
+  just-deleted chat straight back.
+- **The loading card belongs to the app, not the conversation.** Clearing the
+  pane re-attaches it, so a download in progress, or the report of one that
+  failed, is not lost behind a fresh chat with a disabled composer.
+- **Storage is shared with other tabs.** Every write re-reads the stored list
+  and applies one change to it, rather than writing back a copy that may be
+  stale — the difference between two tabs coexisting and one silently deleting
+  the other's chats.
+
 ## Threat model
 
 The model's output is untrusted. It can be steered by any web page the agent
@@ -411,6 +449,14 @@ things follow.
 the log and the JSON export are all masked. The plaintext exists in the `fetch`
 init and in non-enumerable fields on the result object, so serialising a hook
 payload or a transcript entry cannot leak it.
+
+**Saved chats are redacted before they are written.** A transcript holds tool
+results, and a response body can echo a credential back (`/headers`-style
+endpoints do exactly that). Live, the chat pane masks it from the list the
+result carries non-enumerably — a list that does not survive serialisation. So
+`state/chats.js` masks every string in the record against that list *and*
+every stored credential, session-only ones included, and masks sensitive
+response headers by name, before anything reaches `localStorage`.
 
 **Scope is enforced where the secret is used, not where it is configured.** A
 credential with `hosts` set is withheld on both the auto-attach and the
@@ -435,7 +481,10 @@ Known and accepted limits:
 - Masking is literal. A server that base64s or re-encodes a credential before
   reflecting it defeats it.
 - `localStorage` is plaintext. This is stated in the settings sheet, and
-  "session only" credentials exist for anything that matters.
+  "session only" credentials exist for anything that matters. Saved chats are
+  plaintext too: the response bodies the agent fetched are kept with
+  credential values masked, but whatever else they contained is stored as is.
+  Deleting a chat, or all of them, from the settings sheet removes it.
 - The app is same-origin with every other page on its host. On GitHub Pages that
   means every other project on `<user>.github.io`. Use a dedicated host, or
   session-only credentials, if that matters to you.

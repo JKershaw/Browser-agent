@@ -114,6 +114,34 @@ describe('createMockEngine', () => {
     expect(await createMockEngine().isCached('x')).toBe(false);
   });
 
+  it('counts a model as downloaded once it has loaded, until it is deleted', async () => {
+    // As WebLLM's cache behaves: switching back to a model is the cached path.
+    const e = createMockEngine();
+    await e.load('a');
+    expect(await e.isCached('a')).toBe(true);
+    expect(await e.isCached('b')).toBe(false);
+
+    const texts = [];
+    await e.load('a', (p) => texts.push(p.text));
+    expect(texts.some((t) => t.startsWith('Fetching param cache'))).toBe(false);
+
+    await e.deleteFromCache('a');
+    expect(await e.isCached('a')).toBe(false);
+  });
+
+  it('cached: a deleted model is no longer cached', async () => {
+    const e = createMockEngine({ cached: true });
+    await e.deleteFromCache('a');
+    expect(await e.isCached('a')).toBe(false);
+    expect(await e.isCached('b')).toBe(true);
+  });
+
+  it('a failed load does not count as downloaded', async () => {
+    const e = createMockEngine({ failLoad: true });
+    await expect(e.load('a')).rejects.toThrow();
+    expect(await e.isCached('a')).toBe(false);
+  });
+
   it('cached: reports the model as cached and skips the download pass', async () => {
     const e = createMockEngine({ cached: true });
     expect(await e.isCached('mock-model')).toBe(true);

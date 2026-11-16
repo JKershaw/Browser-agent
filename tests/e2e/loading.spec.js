@@ -129,11 +129,13 @@ test('a cached model skips the download and says the load is short', async ({ pa
   expect([...phases]).not.toContain('Downloading the model');
   expect([...phases]).toContain('Loading the model onto the GPU');
 
-  // And the settings sheet reports the cache, in the picker and the hint.
+  // And the settings sheet reports the cache: the other models are listed as
+  // downloaded, switchable without a download.
   await expect(page.locator('#send')).toBeEnabled({ timeout: 20_000 });
   await page.locator('#toggle-settings').click();
-  await expect(page.locator('select option[selected]')).toContainText('cached');
-  await expect(page.locator('#settings-body')).toContainText('Cached in this browser — loads in seconds.');
+  const other = page.locator('.model-row:not(.model-row-active)').first();
+  await expect(other.locator('.model-badge')).toHaveText('Downloaded');
+  await expect(other.getByRole('button', { name: /^Switch to / })).toBeVisible();
 });
 
 test('a storage failure is explained and evidenced, not just reported', async ({ page, appServer }) => {

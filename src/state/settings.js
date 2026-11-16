@@ -318,7 +318,7 @@ export function createSettingsStore(opts = {}) {
 }
 
 /** `localStorage` if it works, an in-memory shim otherwise. */
-function safeLocalStorage() {
+export function safeLocalStorage() {
   try {
     const ls = globalThis.localStorage;
     if (!ls) return createMemoryStorage();
